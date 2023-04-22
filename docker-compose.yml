@@ -1,0 +1,51 @@
+version: "3.7"
+services:
+  geth-sgx:
+    image: "registry.gitlab.com/konvera/flashbots/builder:latest"
+    command:
+      - --sepolia
+      - --http
+      - --http.api=engine,eth,web3,net,debug,flashbots
+      - --http.corsdomain=*
+      - --http.addr=0.0.0.0
+      - --ws
+      - --ws.api=engine,eth,web3,net,debug
+      - --authrpc.jwtsecret=/etc/jwt.hex
+      - --authrpc.vhosts=*
+      - --authrpc.addr=0.0.0.0
+      - --builder
+      - --builder.beacon_endpoints=http://127.0.0.1:3500,http://prysm:3500
+      - --builder.genesis_fork_version=0x90000069
+      - --builder.bellatrix_fork_version=0x90000071
+      - --builder.genesis_validators_root=0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078
+      - --builder.remote_relay_endpoint=https://boost-relay-sepolia.flashbots.net
+      - --miner.extradata='Illuminate Dmocrtz Dstrib Prtct'
+      - --miner.algotype=greedy
+      - --override.shanghai 1677557088
+      - --bootnodes=enode://9246d00bc8fd1742e5ad2428b80fc4dc45d786283e05ef6edbd9002cbc335d40998444732fbe921cb88e1d2c73d1b1de53bae6a2237996e9bfe14f871baf7066@18.168.182.86:30303,enode://ec66ddcf1a974950bd4c782789a7e04f8aa7110a72569b6e65fcd51e937e74eed303b1ea734e4d19cfaec9fbff9b6ee65bf31dcb50ba79acce9dd63a6aca61c7@52.14.151.177:30303
+      - --datadir.ancient=/data/ancient
+    ports:
+      - "0.0.0.0:8545:8545"
+      - "0.0.0.0:8546:8546"
+    env_file:
+      - builder.env
+    volumes:
+      - /run/aesmd:/run/aesmd
+      - ./data:/geth-sgx/data
+      - /etc/jwt.hex:/etc/jwt.hex
+    devices:
+      - /dev/sgx_enclave
+  prysm:
+    image: "prysmaticlabs/prysm-beacon-chain:v4.0.2"
+    volumes:
+      - /etc/jwt.hex:/etc/jwt.hex
+    command:
+      - --accept-terms-of-use
+      - --sepolia
+      - --execution-endpoint=http://geth-sgx:8551
+      - --rpc-host=0.0.0.0
+      - --grpc-gateway-host=0.0.0.0
+      - --monitoring-host=0.0.0.0
+      - --checkpoint-sync-url=https://sepolia.beaconstate.info
+      - --genesis-beacon-api-url=https://sepolia.beaconstate.info
+      - --jwt-secret=/etc/jwt.hex
