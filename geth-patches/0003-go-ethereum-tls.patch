@@ -1,0 +1,94 @@
+diff --git a/go.mod b/go.mod
+index d895f228d..718d493ba 100644
+--- a/go.mod
++++ b/go.mod
+@@ -5,1 +5,7 @@ module github.com/ethereum/go-ethereum
++replace (
++        github.com/google/go-tpm => github.com/thomasten/go-tpm v0.0.0-20230222180349-bb3cc5560299
++        github.com/google/go-tpm-tools => github.com/daniel-weisse/go-tpm-tools v0.0.0-20230105122812-f7474d459dfc
++)
++
+ require (
++        github.com/konvera/geth-sev v0.0.0-20230425080657-b02eb0266f3b
+diff --git a/node/node.go b/node/node.go
+index 2f89bc1ad..48508a379 100644
+--- a/node/node.go
++++ b/node/node.go
+@@ -38,6 +38,8 @@ import (
+ 	"github.com/ethereum/go-ethereum/p2p"
+ 	"github.com/ethereum/go-ethereum/rpc"
+ 	"github.com/gofrs/flock"
++	"github.com/konvera/geth-sev/constellation/atls"
++	"github.com/konvera/geth-sev/constellation/attestation/azure/snp"
+ )
+ 
+ // Node is a container on which services can be registered.
+@@ -146,11 +148,18 @@ func New(conf *Config) (*Node, error) {
+ 		return nil, err
+ 	}
+ 
++	// setup TLS for http and ws
++	issuer := snp.NewIssuer(nil)
++	confTLS, err := atls.CreateAttestationServerTLSConfig(issuer, nil)
++	if err != nil {
++		return nil, err
++	}
++
+ 	// Configure RPC servers.
+-	node.http = newHTTPServer(node.log, conf.HTTPTimeouts)
+-	node.httpAuth = newHTTPServer(node.log, conf.HTTPTimeouts)
+-	node.ws = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts)
+-	node.wsAuth = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts)
++	node.http = newHTTPServer(node.log, conf.HTTPTimeouts, confTLS)
++	node.httpAuth = newHTTPServer(node.log, conf.HTTPTimeouts, nil)
++	node.ws = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts, confTLS)
++	node.wsAuth = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts, nil)
+ 	node.ipc = newIPCServer(node.log, conf.IPCEndpoint())
+ 
+ 	return node, nil
+diff --git a/node/rpcstack.go b/node/rpcstack.go
+index 97d591642..70ccceca5 100644
+--- a/node/rpcstack.go
++++ b/node/rpcstack.go
+@@ -19,6 +19,7 @@ package node
+ import (
+ 	"compress/gzip"
+ 	"context"
++	"crypto/tls"
+ 	"fmt"
+ 	"io"
+ 	"net"
+@@ -80,6 +81,9 @@ type httpServer struct {
+ 	host     string
+ 	port     int
+ 
++	// configTLS is used to configure TLS capability of a server
++	configTLS *tls.Config
++
+ 	handlerNames map[string]string
+ }
+ 
+@@ -87,9 +91,10 @@ const (
+ 	shutdownTimeout = 5 * time.Second
+ )
+ 
+-func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts) *httpServer {
++func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts, configTLS *tls.Config) *httpServer {
+ 	h := &httpServer{log: log, timeouts: timeouts, handlerNames: make(map[string]string)}
+ 
++	h.configTLS = configTLS
+ 	h.httpHandler.Store((*rpcHandler)(nil))
+ 	h.wsHandler.Store((*rpcHandler)(nil))
+ 	return h
+@@ -142,6 +147,11 @@ func (h *httpServer) start() error {
+ 
+ 	// Start the server.
+ 	listener, err := net.Listen("tcp", h.endpoint)
++
++	if h.configTLS != nil {
++		listener = tls.NewListener(listener, h.configTLS)
++	}
++
+ 	if err != nil {
+ 		// If the server fails to start, we need to clear out the RPC and WS
+ 		// configuration so they can be configured another time.
