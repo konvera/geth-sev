@@ -17,9 +17,10 @@ RUN apt-get update && \
 
 WORKDIR /geth
 COPY --from=build-gramine /geth/geth ./
+ADD entrypoint.sh /geth/
 
 EXPOSE 8545 8546 30303 30303/udp
-ENTRYPOINT ["/geth/geth"]
+ENTRYPOINT ["/geth/entrypoint.sh"]
 
 # Add some metadata labels to help programatic image consumption
 ARG COMMIT=""

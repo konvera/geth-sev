@@ -27,6 +27,9 @@ services:
     ports:
       - "0.0.0.0:8545:8545"
       - "0.0.0.0:8546:8546"
+    devices:
+      - /dev/tpm0
+    privileged: true
     env_file:
       - builder.env
     tmpfs:
