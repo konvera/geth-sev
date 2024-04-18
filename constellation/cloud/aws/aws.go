@@ -19,7 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -27,15 +27,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	elasticloadbalancingv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	tagType "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
 	"github.com/konvera/geth-sev/constellation/cloud"
 	"github.com/konvera/geth-sev/constellation/cloud/metadata"
+	"github.com/konvera/geth-sev/constellation/constants"
 	"github.com/konvera/geth-sev/constellation/role"
-)
-
-const (
-	tagName = "Name"
 )
 
 type resourceAPI interface {
@@ -49,11 +47,11 @@ type loadbalancerAPI interface {
 
 type ec2API interface {
 	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	DescribeAddresses(context.Context, *ec2.DescribeAddressesInput, ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error)
 }
 
 type imdsAPI interface {
 	GetInstanceIdentityDocument(context.Context, *imds.GetInstanceIdentityDocumentInput, ...func(*imds.Options)) (*imds.GetInstanceIdentityDocumentOutput, error)
-	GetMetadata(context.Context, *imds.GetMetadataInput, ...func(*imds.Options)) (*imds.GetMetadataOutput, error)
 }
 
 // Cloud provides AWS metadata and API access.
@@ -81,7 +79,7 @@ func New(ctx context.Context) (*Cloud, error) {
 
 // List retrieves all instances belonging to the current Constellation.
 func (c *Cloud) List(ctx context.Context) ([]metadata.InstanceMetadata, error) {
-	uid, err := readInstanceTag(ctx, c.imds, cloud.TagUID)
+	uid, err := c.readInstanceTag(ctx, cloud.TagUID)
 	if err != nil {
 		return nil, fmt.Errorf("retrieving uid tag: %w", err)
 	}
@@ -100,7 +98,7 @@ func (c *Cloud) Self(ctx context.Context) (metadata.InstanceMetadata, error) {
 		return metadata.InstanceMetadata{}, fmt.Errorf("retrieving instance identity: %w", err)
 	}
 
-	instanceRole, err := readInstanceTag(ctx, c.imds, cloud.TagRole)
+	instanceRole, err := c.readInstanceTag(ctx, cloud.TagRole)
 	if err != nil {
 		return metadata.InstanceMetadata{}, fmt.Errorf("retrieving role tag: %w", err)
 	}
@@ -115,12 +113,12 @@ func (c *Cloud) Self(ctx context.Context) (metadata.InstanceMetadata, error) {
 
 // UID returns the UID of the Constellation.
 func (c *Cloud) UID(ctx context.Context) (string, error) {
-	return readInstanceTag(ctx, c.imds, cloud.TagUID)
+	return c.readInstanceTag(ctx, cloud.TagUID)
 }
 
 // InitSecretHash returns the InitSecretHash of the current instance.
 func (c *Cloud) InitSecretHash(ctx context.Context) ([]byte, error) {
-	initSecretHash, err := readInstanceTag(ctx, c.imds, cloud.TagInitSecretHash)
+	initSecretHash, err := c.readInstanceTag(ctx, cloud.TagInitSecretHash)
 	if err != nil {
 		return nil, fmt.Errorf("retrieving init secret hash tag: %w", err)
 	}
@@ -128,40 +126,48 @@ func (c *Cloud) InitSecretHash(ctx context.Context) ([]byte, error) {
 }
 
 // GetLoadBalancerEndpoint returns the endpoint of the load balancer.
-func (c *Cloud) GetLoadBalancerEndpoint(ctx context.Context) (string, error) {
-	uid, err := readInstanceTag(ctx, c.imds, cloud.TagUID)
+func (c *Cloud) GetLoadBalancerEndpoint(ctx context.Context) (host, port string, err error) {
+	hostname, err := c.getLoadBalancerDNSName(ctx)
 	if err != nil {
-		return "", fmt.Errorf("retrieving uid tag: %w", err)
+		return "", "", fmt.Errorf("retrieving load balancer dns name: %w", err)
+	}
+	return hostname, strconv.FormatInt(constants.KubernetesPort, 10), nil
+}
+
+func (c *Cloud) getLoadBalancerDNSName(ctx context.Context) (string, error) {
+	loadbalancer, err := c.getLoadBalancer(ctx)
+	if err != nil {
+		return "", fmt.Errorf("finding Constellation load balancer: %w", err)
+	}
+	if loadbalancer.DNSName == nil {
+		return "", errors.New("load balancer dns name missing")
+	}
+	return *loadbalancer.DNSName, nil
+}
+
+func (c *Cloud) getLoadBalancer(ctx context.Context) (*elasticloadbalancingv2types.LoadBalancer, error) {
+	uid, err := c.readInstanceTag(ctx, cloud.TagUID)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving uid tag: %w", err)
 	}
 	arns, err := c.getARNsByTag(ctx, uid, "elasticloadbalancing:loadbalancer")
 	if err != nil {
-		return "", fmt.Errorf("retrieving load balancer ARNs: %w", err)
+		return nil, fmt.Errorf("retrieving load balancer ARNs: %w", err)
 	}
 	if len(arns) != 1 {
-		return "", fmt.Errorf("%d load balancers found", len(arns))
+		return nil, fmt.Errorf("%d load balancers found", len(arns))
 	}
 
 	output, err := c.loadbalancer.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{
 		LoadBalancerArns: arns,
 	})
 	if err != nil {
-		return "", fmt.Errorf("retrieving load balancer: %w", err)
+		return nil, fmt.Errorf("retrieving load balancer: %w", err)
 	}
 	if len(output.LoadBalancers) != 1 {
-		return "", fmt.Errorf("%d load balancers found; expected 1", len(output.LoadBalancers))
+		return nil, fmt.Errorf("%d load balancers found; expected 1", len(output.LoadBalancers))
 	}
-
-	if len(output.LoadBalancers[0].AvailabilityZones) != 1 {
-		return "", fmt.Errorf("%d availability zones found; expected 1", len(output.LoadBalancers[0].AvailabilityZones))
-	}
-	if len(output.LoadBalancers[0].AvailabilityZones[0].LoadBalancerAddresses) != 1 {
-		return "", fmt.Errorf("%d load balancer addresses found; expected 1", len(output.LoadBalancers[0].AvailabilityZones[0].LoadBalancerAddresses))
-	}
-	if output.LoadBalancers[0].AvailabilityZones[0].LoadBalancerAddresses[0].IpAddress == nil {
-		return "", errors.New("load balancer address is nil")
-	}
-
-	return *output.LoadBalancers[0].AvailabilityZones[0].LoadBalancerAddresses[0].IpAddress, nil
+	return &output.LoadBalancers[0], nil
 }
 
 // getARNsByTag returns a list of ARNs that have the given tag.
@@ -240,13 +246,8 @@ func (c *Cloud) convertToMetadataInstance(ec2Instances []ec2Types.Instance) ([]m
 
 		newInstance := metadata.InstanceMetadata{
 			VPCIP: *ec2Instance.PrivateIpAddress,
+			Name:  *ec2Instance.InstanceId,
 		}
-
-		name, err := findTag(ec2Instance.Tags, tagName)
-		if err != nil {
-			return nil, fmt.Errorf("retrieving tag for instance %s: %w", *ec2Instance.InstanceId, err)
-		}
-		newInstance.Name = name
 
 		instanceRole, err := findTag(ec2Instance.Tags, cloud.TagRole)
 		if err != nil {
@@ -269,16 +270,28 @@ func (c *Cloud) convertToMetadataInstance(ec2Instances []ec2Types.Instance) ([]m
 	return instances, nil
 }
 
-func readInstanceTag(ctx context.Context, api imdsAPI, tag string) (string, error) {
-	reader, err := api.GetMetadata(ctx, &imds.GetMetadataInput{
-		Path: "/tags/instance/" + tag,
+func (c *Cloud) readInstanceTag(ctx context.Context, tag string) (string, error) {
+	identity, err := c.imds.GetInstanceIdentityDocument(ctx, &imds.GetInstanceIdentityDocumentInput{})
+	if err != nil {
+		return "", fmt.Errorf("retrieving instance identity: %w", err)
+	}
+
+	if identity == nil {
+		return "", errors.New("instance identity is nil")
+	}
+
+	out, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{identity.InstanceID},
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("descibing instances: %w", err)
 	}
-	defer reader.Content.Close()
-	instanceTag, err := io.ReadAll(reader.Content)
-	return string(instanceTag), err
+
+	if len(out.Reservations) != 1 || len(out.Reservations[0].Instances) != 1 {
+		return "", fmt.Errorf("expected 1 instance, got %d", len(out.Reservations[0].Instances))
+	}
+
+	return findTag(out.Reservations[0].Instances[0].Tags, tag)
 }
 
 func findTag(tags []ec2Types.Tag, wantKey string) (string, error) {

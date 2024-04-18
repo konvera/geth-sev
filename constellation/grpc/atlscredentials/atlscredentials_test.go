@@ -25,7 +25,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	goleak.VerifyTestMain(m, goleak.IgnoreAnyFunction("github.com/bazelbuild/rules_go/go/tools/bzltestutil.RegisterTimeoutHandler.func1"))
 }
 
 func TestATLSCredentials(t *testing.T) {
@@ -66,7 +66,7 @@ func TestATLSCredentials(t *testing.T) {
 		go func() {
 			var err error
 			defer func() { errChan <- err }()
-			conn, err := grpc.DialContext(context.Background(), "", grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			conn, err := grpc.DialContext(context.Background(), "", grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
 				return lis.Dial()
 			}), grpc.WithTransportCredentials(clientCreds))
 			require.NoError(err)
@@ -121,6 +121,7 @@ type fakeAPI struct {
 	initproto.UnimplementedAPIServer
 }
 
-func (f *fakeAPI) Init(_ context.Context, _ *initproto.InitRequest) (*initproto.InitResponse, error) {
-	return &initproto.InitResponse{}, nil
+func (f *fakeAPI) Init(_ *initproto.InitRequest, stream initproto.API_InitServer) error {
+	_ = stream.Send(&initproto.InitResponse{})
+	return nil
 }

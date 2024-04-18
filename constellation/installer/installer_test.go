@@ -35,7 +35,7 @@ func TestInstall(t *testing.T) {
 	serverURL := "http://server/path"
 	testCases := map[string]struct {
 		server      httpBufconnServer
-		component   components.Component
+		component   *components.Component
 		hash        string
 		destination string
 		extract     bool
@@ -44,8 +44,8 @@ func TestInstall(t *testing.T) {
 	}{
 		"download works": {
 			server: newHTTPBufconnServerWithBody([]byte("file-contents")),
-			component: components.Component{
-				URL:         serverURL,
+			component: &components.Component{
+				Url:         serverURL,
 				Hash:        "sha256:f03779b36bece74893fd6533a67549675e21573eb0e288d87158738f9c24594e",
 				InstallPath: "/destination",
 			},
@@ -53,8 +53,8 @@ func TestInstall(t *testing.T) {
 		},
 		"download with extract works": {
 			server: newHTTPBufconnServerWithBody(createTarGz([]byte("file-contents"), "/destination")),
-			component: components.Component{
-				URL:         serverURL,
+			component: &components.Component{
+				Url:         serverURL,
 				Hash:        "sha256:a52a1664ca0a6ec9790384e3d058852ab8b3a8f389a9113d150fdc6ab308d949",
 				InstallPath: "/prefix",
 				Extract:     true,
@@ -63,18 +63,45 @@ func TestInstall(t *testing.T) {
 		},
 		"hash validation fails": {
 			server: newHTTPBufconnServerWithBody([]byte("file-contents")),
-			component: components.Component{
-				URL:         serverURL,
+			component: &components.Component{
+				Url:         serverURL,
 				Hash:        "sha256:abc",
 				InstallPath: "/destination",
 			},
 			wantErr: true,
 		},
+		"hash is not mandatory": {
+			server: newHTTPBufconnServerWithBody([]byte("file-contents")),
+			component: &components.Component{
+				Url:         serverURL,
+				Hash:        "",
+				InstallPath: "/destination",
+			},
+			wantFiles: map[string][]byte{"/destination": []byte("file-contents")},
+		},
 		"download fails": {
-			server: newHTTPBufconnServer(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }),
-			component: components.Component{
-				URL:         serverURL,
+			server: newHTTPBufconnServer(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }),
+			component: &components.Component{
+				Url:         serverURL,
 				Hash:        "sha256:abc",
+				InstallPath: "/destination",
+			},
+			wantErr: true,
+		},
+		"dataurl works": {
+			server: newHTTPBufconnServer(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }),
+			component: &components.Component{
+				Url:         "data:text/plain,file-contents",
+				Hash:        "",
+				InstallPath: "/destination",
+			},
+			wantFiles: map[string][]byte{"/destination": []byte("file-contents")},
+		},
+		"broken dataurl fails": {
+			server: newHTTPBufconnServer(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }),
+			component: &components.Component{
+				Url:         "data:file-contents",
+				Hash:        "",
 				InstallPath: "/destination",
 			},
 			wantErr: true,
@@ -102,7 +129,7 @@ func TestInstall(t *testing.T) {
 				fs:        &afero.Afero{Fs: afero.NewMemMapFs()},
 				hClient:   &hClient,
 				clock:     testclock.NewFakeClock(time.Time{}),
-				retriable: func(err error) bool { return false },
+				retriable: func(_ error) bool { return false },
 			}
 
 			err := inst.Install(context.Background(), tc.component)
@@ -361,7 +388,7 @@ func TestDownloadToTempDir(t *testing.T) {
 			wantFile: []byte("file-contents"),
 		},
 		"download fails": {
-			server:  newHTTPBufconnServer(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }),
+			server:  newHTTPBufconnServer(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }),
 			wantErr: true,
 		},
 		"creating temp file fails on RO fs": {
@@ -370,7 +397,7 @@ func TestDownloadToTempDir(t *testing.T) {
 			wantErr:  true,
 		},
 		"content length mismatch": {
-			server: newHTTPBufconnServer(func(writer http.ResponseWriter, request *http.Request) {
+			server: newHTTPBufconnServer(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Length", "1337")
 				writer.WriteHeader(200)
 			}),
@@ -580,7 +607,7 @@ func newHTTPBufconnServer(handlerFunc http.HandlerFunc) httpBufconnServer {
 }
 
 func newHTTPBufconnServerWithBody(body []byte) httpBufconnServer {
-	return newHTTPBufconnServer(func(writer http.ResponseWriter, request *http.Request) {
+	return newHTTPBufconnServer(func(writer http.ResponseWriter, _ *http.Request) {
 		if _, err := writer.Write(body); err != nil {
 			panic(err)
 		}
@@ -588,7 +615,7 @@ func newHTTPBufconnServerWithBody(body []byte) httpBufconnServer {
 }
 
 func newHTTPBufconnServerWithState(state chan int, body []byte) httpBufconnServer {
-	return newHTTPBufconnServer(func(w http.ResponseWriter, r *http.Request) {
+	return newHTTPBufconnServer(func(w http.ResponseWriter, _ *http.Request) {
 		switch <-state {
 		case 500:
 			w.WriteHeader(500)

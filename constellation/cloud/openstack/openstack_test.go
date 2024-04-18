@@ -16,6 +16,7 @@ import (
 	"github.com/konvera/geth-sev/constellation/role"
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/servers"
+	"github.com/gophercloud/gophercloud/openstack/networking/v2/networks"
 	"github.com/gophercloud/gophercloud/openstack/networking/v2/subnets"
 	"github.com/gophercloud/gophercloud/pagination"
 	"github.com/stretchr/testify/assert"
@@ -85,7 +86,7 @@ func TestSelf(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
 
-			c := &Cloud{imds: tc.imds}
+			c := &MetadataClient{imds: tc.imds}
 
 			got, err := c.Self(context.Background())
 
@@ -175,7 +176,8 @@ func TestList(t *testing.T) {
 						Addresses: newTestAddrs("198.51.100.1", ""),
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			want: []metadata.InstanceMetadata{
 				{
@@ -196,7 +198,8 @@ func TestList(t *testing.T) {
 			imds: &stubIMDSClient{uidResult: "uid"},
 			api: &stubServersClient{
 				serversPager: newSeverPager([]servers.Server{}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -204,9 +207,17 @@ func TestList(t *testing.T) {
 			imds:    &stubIMDSClient{uidErr: someErr},
 			wantErr: true,
 		},
+		"list nets errors": {
+			imds: &stubIMDSClient{uidResult: "uid"},
+			api: &stubServersClient{
+				netsPager: newNetPager([]networks.Network{{Name: "mynet"}}, someErr),
+			},
+			wantErr: true,
+		},
 		"list subnets error": {
 			imds: &stubIMDSClient{uidResult: "uid"},
 			api: &stubServersClient{
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
 				subnetsPager: stubPager{allPagesErr: someErr},
 			},
 			wantErr: true,
@@ -214,16 +225,18 @@ func TestList(t *testing.T) {
 		"extract subnets error": {
 			imds: &stubIMDSClient{uidResult: "uid"},
 			api: &stubServersClient{
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
 				subnetsPager: newSubnetPager([]subnets.Subnet{}, someErr),
 			},
 			wantErr: true,
 		},
-		"multiple subnets error": {
+		"subnet name mismatch error": {
 			imds: &stubIMDSClient{uidResult: "uid"},
 			api: &stubServersClient{
+				netsPager: newNetPager([]networks.Network{{Name: "mynet"}}, nil),
 				subnetsPager: newSubnetPager([]subnets.Subnet{
-					{CIDR: "192.0.2.0/24"},
-					{CIDR: "198.51.100.0/24"},
+					{Name: "othernet", CIDR: "192.0.2.0/24"},
+					{Name: "yetanothernet", CIDR: "198.51.100.0/24"},
 				}, nil),
 			},
 			wantErr: true,
@@ -231,7 +244,8 @@ func TestList(t *testing.T) {
 		"parse subnet error": {
 			imds: &stubIMDSClient{uidResult: "uid"},
 			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "notAnIP"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "notAnIP"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -239,7 +253,8 @@ func TestList(t *testing.T) {
 			imds: &stubIMDSClient{uidResult: "uid"},
 			api: &stubServersClient{
 				serversPager: stubPager{allPagesErr: someErr},
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -247,7 +262,8 @@ func TestList(t *testing.T) {
 			imds: &stubIMDSClient{uidResult: "uid"},
 			api: &stubServersClient{
 				serversPager: newSeverPager([]servers.Server{}, someErr),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -261,7 +277,8 @@ func TestList(t *testing.T) {
 						Addresses: newTestAddrs("192.0.2.5", ""),
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -275,7 +292,8 @@ func TestList(t *testing.T) {
 						Addresses: newTestAddrs("192.0.2.5", ""),
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -289,7 +307,8 @@ func TestList(t *testing.T) {
 						Addresses: newTestAddrs("192.0.2.5", ""),
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -304,7 +323,8 @@ func TestList(t *testing.T) {
 						Addresses: newTestAddrs("192.0.2.5", ""),
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -319,7 +339,8 @@ func TestList(t *testing.T) {
 						Addresses: newTestAddrs("192.0.2.5", ""),
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -334,7 +355,8 @@ func TestList(t *testing.T) {
 						Addresses: map[string]any{"foo": "bar"},
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -349,7 +371,8 @@ func TestList(t *testing.T) {
 						Addresses: newTestAddrs("invalidIP", ""),
 					},
 				}, nil),
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
+				netsPager:    newNetPager([]networks.Network{{Name: "mynet"}}, nil),
+				subnetsPager: newSubnetPager([]subnets.Subnet{{Name: "mynet", CIDR: "192.0.2.0/24"}}, nil),
 			},
 			wantErr: true,
 		},
@@ -359,7 +382,7 @@ func TestList(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
 
-			c := &Cloud{imds: tc.imds, api: tc.api}
+			c := &MetadataClient{imds: tc.imds, api: tc.api}
 
 			got, err := c.List(context.Background())
 
@@ -393,7 +416,7 @@ func TestUID(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
 
-			c := &Cloud{imds: tc.imds}
+			c := &MetadataClient{imds: tc.imds}
 
 			got, err := c.UID(context.Background())
 
@@ -427,7 +450,7 @@ func TestInitSecretHash(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
 
-			c := &Cloud{imds: tc.imds}
+			c := &MetadataClient{imds: tc.imds}
 
 			got, err := c.InitSecretHash(context.Background())
 
@@ -442,193 +465,18 @@ func TestInitSecretHash(t *testing.T) {
 }
 
 func TestGetLoadBalancerEndpoint(t *testing.T) {
-	// newTestAddrs returns a set of raw server addresses as we would get from
-	// a ListServers call and as expected by the parseSeverAddresses function.
-	// The hardcoded addresses don't match what we are looking for. A valid
-	// address can be injected. You can pass a second valid address to test
-	// that the first valid one is chosen.
-	newTestAddrs := func(floatingIP1, floatingIP2 string, fixedIP1 string) map[string]any {
-		return map[string]any{
-			"network1": []any{
-				map[string]any{
-					"addr":                    "192.0.2.2",
-					"version":                 4,
-					"OS-EXT-IPS:type":         "floating",
-					"OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:0c:0c:0c",
-				},
-			},
-			"network2": []any{
-				map[string]any{
-					"addr":                    fixedIP1,
-					"version":                 4,
-					"OS-EXT-IPS:type":         "fixed",
-					"OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:0c:0c:0c",
-				},
-				map[string]any{
-					"addr":                    "2001:db8:3333:4444:5555:6666:7777:8888",
-					"version":                 6,
-					"OS-EXT-IPS:type":         "floating",
-					"OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:0c:0c:0c",
-				},
-				map[string]any{
-					"addr":                    floatingIP1,
-					"version":                 4,
-					"OS-EXT-IPS:type":         "floating",
-					"OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:0c:0c:0c",
-				},
-				map[string]any{
-					"addr":                    floatingIP2,
-					"version":                 4,
-					"OS-EXT-IPS:type":         "floating",
-					"OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:0c:0c:0c",
-				},
-			},
-		}
-	}
-
 	testCases := map[string]struct {
 		imds    *stubIMDSClient
-		api     *stubServersClient
 		want    string
 		wantErr bool
 	}{
 		"error returned from IMDS client": {
-			imds:    &stubIMDSClient{uidErr: errors.New("failed")},
+			imds:    &stubIMDSClient{loadBalancerEndpointErr: errors.New("failed")},
 			wantErr: true,
 		},
-		"error returned from getSubnetCIDR": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager(nil, errors.New("failed")),
-			},
-			wantErr: true,
-		},
-		"error returned from getServers": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager(nil, errors.New("failed")),
-			},
-			wantErr: true,
-		},
-		"sever with empty name skipped": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						ID:        "id1",
-						Tags:      &[]string{"constellation-role-control-plane", "constellation-uid-7777"},
-						Addresses: newTestAddrs("198.51.100.0", "", "192.0.2.1"),
-					},
-				}, nil),
-			},
-			wantErr: true,
-		},
-		"server with empty ID skipped": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						Name:      "name1",
-						Tags:      &[]string{"constellation-role-control-plane", "constellation-uid-7777"},
-						Addresses: newTestAddrs("198.51.100.0", "", "192.0.2.1"),
-					},
-				}, nil),
-			},
-			wantErr: true,
-		},
-		"sever with nil tags skipped": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						Name:      "name1",
-						ID:        "id1",
-						Addresses: newTestAddrs("198.51.100.0", "", "192.0.2.1"),
-					},
-				}, nil),
-			},
-			wantErr: true,
-		},
-		"server has invalid address": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						Name:      "name1",
-						ID:        "id1",
-						Tags:      &[]string{"constellation-role-control-plane", "constellation-uid-7777"},
-						Addresses: newTestAddrs("", "", "invalidIP"),
-					},
-				}, nil),
-			},
-			wantErr: true,
-		},
-		"server without parseable addresses skipped": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						Name: "name1",
-						ID:   "id1",
-						Tags: &[]string{"constellation-role-control-plane", "constellation-uid-7777"},
-						Addresses: map[string]any{
-							"somekey": "invalid",
-						},
-					},
-				}, nil),
-			},
-			wantErr: true,
-		},
-		"invalid endpoint returned from server addresses": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						Name:      "name1",
-						ID:        "id1",
-						Tags:      &[]string{"constellation-role-control-plane", "constellation-uid-7777"},
-						Addresses: newTestAddrs("invalidIP", "", "192.0.2.1"),
-					},
-				}, nil),
-			},
-			wantErr: true,
-		},
-		"valid endpoint returned from server addresses not in subnet CIDR": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						Name:      "name1",
-						ID:        "id1",
-						Tags:      &[]string{"constellation-role-control-plane", "constellation-uid-7777"},
-						Addresses: newTestAddrs("198.51.100.0", "", "192.0.2.1"),
-					},
-				}, nil),
-			},
-			want: "198.51.100.0",
-		},
-		"first valid endpoint returned from server addresses not in subnet CIDR": {
-			imds: &stubIMDSClient{},
-			api: &stubServersClient{
-				subnetsPager: newSubnetPager([]subnets.Subnet{{CIDR: "192.0.2.0/24"}}, nil),
-				serversPager: newSeverPager([]servers.Server{
-					{
-						Name:      "name1",
-						ID:        "id1",
-						Tags:      &[]string{"constellation-role-control-plane", "constellation-uid-7777"},
-						Addresses: newTestAddrs("198.51.100.0", "198.51.100.1", "192.0.2.1"),
-					},
-				}, nil),
-			},
-			want: "198.51.100.0",
+		"UID returned from IMDS client": {
+			imds: &stubIMDSClient{loadBalancerEndpointResult: "some.endpoint"},
+			want: "some.endpoint",
 		},
 	}
 
@@ -636,12 +484,9 @@ func TestGetLoadBalancerEndpoint(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
 
-			c := &Cloud{
-				imds: tc.imds,
-				api:  tc.api,
-			}
+			c := &MetadataClient{imds: tc.imds}
 
-			got, err := c.GetLoadBalancerEndpoint(context.Background())
+			got, _, err := c.GetLoadBalancerEndpoint(context.Background())
 
 			if tc.wantErr {
 				assert.Error(err)
@@ -650,6 +495,24 @@ func TestGetLoadBalancerEndpoint(t *testing.T) {
 				assert.Equal(tc.want, got)
 			}
 		})
+	}
+}
+
+// newNetPager returns a network pager as we would get from a ListNetworks.
+func newNetPager(nets []networks.Network, err error) stubPager {
+	return stubPager{
+		page: networks.NetworkPage{
+			LinkedPageBase: pagination.LinkedPageBase{
+				PageResult: pagination.PageResult{
+					Result: gophercloud.Result{
+						Body: struct {
+							Networks []networks.Network `json:"networks"`
+						}{nets},
+						Err: err,
+					},
+				},
+			},
+		},
 	}
 }
 

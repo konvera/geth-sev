@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,13 +26,18 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/cloud/cloudprovider"
-	"github.com/konvera/geth-sev/constellation/sigstore"
 	"github.com/google/go-tpm/tpmutil"
 	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	"gopkg.in/yaml.v3"
+
+	"github.com/konvera/geth-sev/constellation/api/versionsapi"
 )
+
+//go:generate measurement-generator
 
 const (
 	// PCRIndexClusterID is a PCR we extend to mark the node as initialized.
@@ -41,18 +45,74 @@ const (
 	PCRIndexClusterID = tpmutil.Handle(15)
 	// PCRIndexOwnerID is a PCR we extend to mark the node as initialized.
 	// The value used to extend is derived from Constellation's master key.
-	// TODO: move to stable, non-debug PCR before use.
+	// TODO(daniel-weisse): move to stable, non-debug PCR before use.
 	PCRIndexOwnerID = tpmutil.Handle(16)
+
+	// TDXIndexClusterID is the measurement used to mark the node as initialized.
+	// The value is the index of the RTMR + 1, since index 0 of the TDX measurements is reserved for MRTD.
+	TDXIndexClusterID = RTMRIndexClusterID + 1
+	// RTMRIndexClusterID is the RTMR we extend to mark the node as initialized.
+	RTMRIndexClusterID = 2
+
+	// PCRMeasurementLength holds the length for valid PCR measurements (SHA256).
+	PCRMeasurementLength = 32
+	// TDXMeasurementLength holds the length for valid TDX measurements (SHA384).
+	TDXMeasurementLength = 48
 )
 
 // M are Platform Configuration Register (PCR) values that make up the Measurements.
 type M map[uint32]Measurement
 
-// WithMetadata is a struct supposed to provide CSP & image metadata next to measurements.
-type WithMetadata struct {
-	CSP          cloudprovider.Provider `json:"csp" yaml:"csp"`
-	Image        string                 `json:"image" yaml:"image"`
-	Measurements M                      `json:"measurements" yaml:"measurements"`
+// ImageMeasurementsV2 is a struct to hold measurements for a specific image.
+// .List contains measurements for all variants of the image.
+type ImageMeasurementsV2 struct {
+	Version string                     `json:"version" yaml:"version"`
+	Ref     string                     `json:"ref" yaml:"ref"`
+	Stream  string                     `json:"stream" yaml:"stream"`
+	List    []ImageMeasurementsV2Entry `json:"list" yaml:"list"`
+}
+
+// ImageMeasurementsV2Entry is a struct to hold measurements for one variant of a specific image.
+type ImageMeasurementsV2Entry struct {
+	CSP                cloudprovider.Provider `json:"csp" yaml:"csp"`
+	AttestationVariant string                 `json:"attestationVariant" yaml:"attestationVariant"`
+	Measurements       M                      `json:"measurements" yaml:"measurements"`
+}
+
+// MergeImageMeasurementsV2 combines the image measurement entries from multiple sources into a single
+// ImageMeasurementsV2 object.
+func MergeImageMeasurementsV2(measurements ...ImageMeasurementsV2) (ImageMeasurementsV2, error) {
+	if len(measurements) == 0 {
+		return ImageMeasurementsV2{}, errors.New("no measurement objects specified")
+	}
+	if len(measurements) == 1 {
+		return measurements[0], nil
+	}
+	out := ImageMeasurementsV2{
+		Version: measurements[0].Version,
+		Ref:     measurements[0].Ref,
+		Stream:  measurements[0].Stream,
+		List:    []ImageMeasurementsV2Entry{},
+	}
+	for _, m := range measurements {
+		if m.Version != out.Version {
+			return ImageMeasurementsV2{}, errors.New("version mismatch")
+		}
+		if m.Ref != out.Ref {
+			return ImageMeasurementsV2{}, errors.New("ref mismatch")
+		}
+		if m.Stream != out.Stream {
+			return ImageMeasurementsV2{}, errors.New("stream mismatch")
+		}
+		out.List = append(out.List, m.List...)
+	}
+	sort.SliceStable(out.List, func(i, j int) bool {
+		if out.List[i].CSP != out.List[j].CSP {
+			return out.List[i].CSP < out.List[j].CSP
+		}
+		return out.List[i].AttestationVariant < out.List[j].AttestationVariant
+	})
+	return out, nil
 }
 
 // MarshalYAML returns the YAML encoding of m.
@@ -70,13 +130,29 @@ func (m M) MarshalYAML() (any, error) {
 }
 
 // FetchAndVerify fetches measurement and signature files via provided URLs,
-// using client for download. The publicKey is used to verify the measurements.
+// using client for download.
 // The hash of the fetched measurements is returned.
 func (m *M) FetchAndVerify(
-	ctx context.Context, client *http.Client, measurementsURL, signatureURL *url.URL,
-	publicKey []byte, metadata WithMetadata,
+	ctx context.Context, client *http.Client, verifier cosignVerifier,
+	measurementsURL, signatureURL *url.URL,
+	version versionsapi.Version, csp cloudprovider.Provider, attestationVariant variant.Variant,
 ) (string, error) {
-	measurements, err := getFromURL(ctx, client, measurementsURL)
+	return m.fetchAndVerify(
+		ctx, client, verifier,
+		measurementsURL, signatureURL,
+		version, csp, attestationVariant,
+	)
+}
+
+// fetchAndVerify fetches measurement and signature files via provided URLs,
+// using client for download. The publicKey is used to verify the measurements.
+// The hash of the fetched measurements is returned.
+func (m *M) fetchAndVerify(
+	ctx context.Context, client *http.Client, verifier cosignVerifier,
+	measurementsURL, signatureURL *url.URL,
+	version versionsapi.Version, csp cloudprovider.Provider, attestationVariant variant.Variant,
+) (string, error) {
+	measurementsRaw, err := getFromURL(ctx, client, measurementsURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch measurements: %w", err)
 	}
@@ -84,32 +160,36 @@ func (m *M) FetchAndVerify(
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch signature: %w", err)
 	}
-	if err := sigstore.VerifySignature(measurements, signature, publicKey); err != nil {
+	if err := verifier.VerifySignature(measurementsRaw, signature); err != nil {
 		return "", err
 	}
 
-	var mWithMetadata WithMetadata
-	if err := json.Unmarshal(measurements, &mWithMetadata); err != nil {
-		if yamlErr := yaml.Unmarshal(measurements, &mWithMetadata); yamlErr != nil {
-			return "", errors.Join(
-				err,
-				fmt.Errorf("trying yaml format: %w", yamlErr),
-			)
-		}
+	var measurements ImageMeasurementsV2
+	if err := json.Unmarshal(measurementsRaw, &measurements); err != nil {
+		return "", err
 	}
-
-	if mWithMetadata.CSP != metadata.CSP {
-		return "", fmt.Errorf("invalid measurement metadata: CSP mismatch: expected %s, got %s", metadata.CSP, mWithMetadata.CSP)
+	if err := m.fromImageMeasurementsV2(measurements, version, csp, attestationVariant); err != nil {
+		return "", err
 	}
-	if mWithMetadata.Image != metadata.Image {
-		return "", fmt.Errorf("invalid measurement metadata: image mismatch: expected %s, got %s", metadata.Image, mWithMetadata.Image)
-	}
-
-	*m = mWithMetadata.Measurements
-
-	shaHash := sha256.Sum256(measurements)
-
+	shaHash := sha256.Sum256(measurementsRaw)
 	return hex.EncodeToString(shaHash[:]), nil
+}
+
+// FetchNoVerify fetches measurement via provided URLs,
+// using client for download. Measurements are not verified.
+func (m *M) FetchNoVerify(ctx context.Context, client *http.Client, measurementsURL *url.URL,
+	version versionsapi.Version, csp cloudprovider.Provider, attestationVariant variant.Variant,
+) error {
+	measurementsRaw, err := getFromURL(ctx, client, measurementsURL)
+	if err != nil {
+		return fmt.Errorf("failed to fetch measurements from %s: %w", measurementsURL.String(), err)
+	}
+
+	var measurements ImageMeasurementsV2
+	if err := json.Unmarshal(measurementsRaw, &measurements); err != nil {
+		return err
+	}
+	return m.fromImageMeasurementsV2(measurements, version, csp, attestationVariant)
 }
 
 // CopyFrom copies over all values from other. Overwriting existing values,
@@ -120,6 +200,15 @@ func (m *M) CopyFrom(other M) {
 	}
 }
 
+// Copy creates a new map with the same values as the original.
+func (m *M) Copy() M {
+	newM := make(M, len(*m))
+	for idx := range *m {
+		newM[idx] = (*m)[idx]
+	}
+	return newM
+}
+
 // EqualTo tests whether the provided other Measurements are equal to these
 // measurements.
 func (m *M) EqualTo(other M) bool {
@@ -128,7 +217,7 @@ func (m *M) EqualTo(other M) bool {
 	}
 	for k, v := range *m {
 		otherExpected := other[k].Expected
-		if !bytes.Equal(v.Expected[:], otherExpected[:]) {
+		if !bytes.Equal(v.Expected, otherExpected) {
 			return false
 		}
 		if v.ValidationOpt != other[k].ValidationOpt {
@@ -136,6 +225,37 @@ func (m *M) EqualTo(other M) bool {
 		}
 	}
 	return true
+}
+
+// Compare compares the expected measurements to the given list of measurements.
+// It returns a list of warnings for non matching measurements for WarnOnly entries,
+// and a list of errors for non matching measurements for Enforce entries.
+func (m M) Compare(other map[uint32][]byte) (warnings []string, errs []error) {
+	// Get list of indices in expected measurements
+	var mIndices []uint32
+	for idx := range m {
+		mIndices = append(mIndices, idx)
+	}
+	sort.SliceStable(mIndices, func(i, j int) bool {
+		return mIndices[i] < mIndices[j]
+	})
+
+	for _, idx := range mIndices {
+		if !bytes.Equal(m[idx].Expected, other[idx]) {
+			msg := fmt.Sprintf("untrusted measurement value %x at index %d", other[idx], idx)
+			if len(other[idx]) == 0 {
+				msg = fmt.Sprintf("missing measurement value for index %d", idx)
+			}
+
+			if m[idx].ValidationOpt == Enforce {
+				errs = append(errs, errors.New(msg))
+			} else {
+				warnings = append(warnings, fmt.Sprintf("Encountered %s", msg))
+			}
+		}
+	}
+
+	return warnings, errs
 }
 
 // GetEnforced returns a list of all enforced Measurements,
@@ -177,10 +297,97 @@ func (m *M) SetEnforced(enforced []uint32) error {
 	return nil
 }
 
+// UnmarshalJSON unmarshals measurements from json.
+// This function enforces all measurements to be of equal length.
+func (m *M) UnmarshalJSON(b []byte) error {
+	newM := make(map[uint32]Measurement)
+	if err := json.Unmarshal(b, &newM); err != nil {
+		return err
+	}
+
+	// check if all measurements are of equal length
+	if err := checkLength(newM); err != nil {
+		return err
+	}
+
+	*m = newM
+	return nil
+}
+
+// UnmarshalYAML unmarshals measurements from yaml.
+// This function enforces all measurements to be of equal length.
+func (m *M) UnmarshalYAML(unmarshal func(any) error) error {
+	newM := make(map[uint32]Measurement)
+	if err := unmarshal(&newM); err != nil {
+		return err
+	}
+
+	// check if all measurements are of equal length
+	if err := checkLength(newM); err != nil {
+		return err
+	}
+
+	*m = newM
+	return nil
+}
+
+// String returns a string representation of the measurements.
+func (m M) String() string {
+	var returnString string
+	for i, measurement := range m {
+		returnString = strings.Join([]string{returnString, fmt.Sprintf("%d: 0x%s", i, hex.EncodeToString(measurement.Expected))}, ",")
+	}
+	return returnString
+}
+
+func (m *M) fromImageMeasurementsV2(
+	measurements ImageMeasurementsV2, wantVersion versionsapi.Version,
+	csp cloudprovider.Provider, attestationVariant variant.Variant,
+) error {
+	gotVersion, err := versionsapi.NewVersion(measurements.Ref, measurements.Stream, measurements.Version, versionsapi.VersionKindImage)
+	if err != nil {
+		return fmt.Errorf("invalid metadata version: %w", err)
+	}
+	if !wantVersion.Equal(gotVersion) {
+		return fmt.Errorf("invalid measurement metadata: version mismatch: expected %s, got %s", wantVersion.ShortPath(), gotVersion.ShortPath())
+	}
+
+	// find measurements for requested image in list
+	var measurementsEntry ImageMeasurementsV2Entry
+	var found bool
+	for _, entry := range measurements.List {
+		gotCSP := entry.CSP
+		if gotCSP != csp {
+			continue
+		}
+		gotAttestationVariant, err := variant.FromString(entry.AttestationVariant)
+		if err != nil {
+			continue
+		}
+		if gotAttestationVariant == nil || attestationVariant == nil {
+			continue
+		}
+		if !gotAttestationVariant.Equal(attestationVariant) {
+			continue
+		}
+		measurementsEntry = entry
+		found = true
+		break
+	}
+
+	if !found {
+		return fmt.Errorf("invalid measurement metadata: no measurements found for csp %s, attestationVariant %s and image %s", csp.String(), attestationVariant, wantVersion.ShortPath())
+	}
+
+	*m = measurementsEntry.Measurements
+	return nil
+}
+
 // Measurement wraps expected PCR value and whether it is enforced.
 type Measurement struct {
 	// Expected measurement value.
-	Expected [32]byte `json:"expected" yaml:"expected"`
+	// 32 bytes for vTPM attestation, 48 for TDX.
+	Expected []byte `json:"expected" yaml:"expected"`
 	// ValidationOpt indicates how measurement mismatches should be handled.
 	ValidationOpt MeasurementValidationOption `json:"warnOnly" yaml:"warnOnly"`
 }
@@ -257,63 +464,85 @@ func (m Measurement) MarshalYAML() (any, error) {
 func (m *Measurement) unmarshal(eM encodedMeasurement) error {
 	expected, err := hex.DecodeString(eM.Expected)
 	if err != nil {
-		// expected value might be in base64 legacy format
-		// TODO: Remove with v2.4.0
-		hexErr := err
-		expected, err = base64.StdEncoding.DecodeString(eM.Expected)
-		if err != nil {
-			return errors.Join(
-				fmt.Errorf("invalid measurement: not a hex string %w", hexErr),
-				fmt.Errorf("not a base64 string: %w", err),
-			)
-		}
+		return fmt.Errorf("decoding measurement: %w", err)
 	}
 
-	if len(expected) != 32 {
+	if len(expected) != 32 && len(expected) != 48 {
 		return fmt.Errorf("invalid measurement: invalid length: %d", len(expected))
 	}
 
-	m.Expected = *(*[32]byte)(expected)
+	m.Expected = expected
 	m.ValidationOpt = eM.WarnOnly
 
 	return nil
 }
 
-// WithAllBytes returns a measurement value where all 32 bytes are set to b.
-func WithAllBytes(b byte, validationOpt MeasurementValidationOption) Measurement {
+// WithAllBytes returns a measurement value where all bytes are set to b. Takes a dynamic length as input.
+// Expected are either 32 bytes (PCRMeasurementLength) or 48 bytes (TDXMeasurementLength).
+// Over inputs are possible in this function, but potentially rejected elsewhere.
+func WithAllBytes(b byte, validationOpt MeasurementValidationOption, len int) Measurement {
 	return Measurement{
-		Expected:      *(*[32]byte)(bytes.Repeat([]byte{b}, 32)),
+		Expected:      bytes.Repeat([]byte{b}, len),
 		ValidationOpt: validationOpt,
 	}
 }
 
 // PlaceHolderMeasurement returns a measurement with placeholder values for Expected.
-func PlaceHolderMeasurement() Measurement {
+func PlaceHolderMeasurement(len int) Measurement {
 	return Measurement{
-		Expected:      *(*[32]byte)(bytes.Repeat([]byte{0x12, 0x34}, 16)),
+		Expected:      bytes.Repeat([]byte{0x12, 0x34}, len/2),
 		ValidationOpt: Enforce,
 	}
 }
 
-func getFromURL(ctx context.Context, client *http.Client, sourceURL *url.URL) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL.String(), http.NoBody)
-	if err != nil {
-		return []byte{}, err
-	}
+// DefaultsFor provides the default measurements for given cloud provider.
+func DefaultsFor(provider cloudprovider.Provider, attestationVariant variant.Variant) M {
+	switch {
+	case provider == cloudprovider.AWS && attestationVariant == variant.AWSNitroTPM{}:
+		return aws_AWSNitroTPM.Copy()
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return []byte{}, err
+	case provider == cloudprovider.AWS && attestationVariant == variant.AWSSEVSNP{}:
+		return aws_AWSSEVSNP.Copy()
+
+	case provider == cloudprovider.Azure && attestationVariant == variant.AzureSEVSNP{}:
+		return azure_AzureSEVSNP.Copy()
+
+	case provider == cloudprovider.Azure && attestationVariant == variant.AzureTDX{}:
+		return azure_AzureTDX.Copy()
+
+	case provider == cloudprovider.Azure && attestationVariant == variant.AzureTrustedLaunch{}:
+		return azure_AzureTrustedLaunch.Copy()
+
+	case provider == cloudprovider.GCP && attestationVariant == variant.GCPSEVES{}:
+		return gcp_GCPSEVES.Copy()
+
+	case provider == cloudprovider.GCP && attestationVariant == variant.GCPSEVSNP{}:
+		return gcp_GCPSEVSNP.Copy()
+
+	case provider == cloudprovider.OpenStack && attestationVariant == variant.QEMUVTPM{}:
+		return openstack_QEMUVTPM.Copy()
+
+	case provider == cloudprovider.QEMU && attestationVariant == variant.QEMUTDX{}:
+		return qemu_QEMUTDX.Copy()
+
+	case provider == cloudprovider.QEMU && attestationVariant == variant.QEMUVTPM{}:
+		return qemu_QEMUVTPM.Copy()
+
+	default:
+		return nil
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return []byte{}, fmt.Errorf("http status code: %d", resp.StatusCode)
+}
+
+func checkLength(m map[uint32]Measurement) error {
+	var length int
+	for idx, measurement := range m {
+		if length == 0 {
+			length = len(measurement.Expected)
+		} else if len(measurement.Expected) != length {
+			return fmt.Errorf("inconsistent measurement length: index %d: expected %d, got %d", idx, length, len(measurement.Expected))
+		}
 	}
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return []byte{}, err
-	}
-	return content, nil
+	return nil
 }
 
 type encodedMeasurement struct {
@@ -346,4 +575,26 @@ func (c mYamlContent) Swap(i, j int) {
 	// We need to swap both key and value.
 	c[2*i], c[2*j] = c[2*j], c[2*i]
 	c[2*i+1], c[2*j+1] = c[2*j+1], c[2*i+1]
+}
+
+// getFromURL fetches the content from the given URL and returns the content as a byte slice.
+func getFromURL(ctx context.Context, client *http.Client, sourceURL *url.URL) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL.String(), http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http status code: %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+type cosignVerifier interface {
+	VerifySignature(content, signature []byte) error
 }

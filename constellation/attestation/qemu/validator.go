@@ -10,11 +10,12 @@ import (
 	"context"
 	"crypto"
 
+	"github.com/konvera/geth-sev/constellation/attestation"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/attestation/vtpm"
 	"github.com/konvera/geth-sev/constellation/config"
-	"github.com/konvera/geth-sev/constellation/variant"
 	"github.com/google/go-tpm-tools/proto/attest"
-	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/legacy/tpm2"
 )
 
 // Validator for QEMU VM attestation.
@@ -24,7 +25,7 @@ type Validator struct {
 }
 
 // NewValidator initializes a new QEMU validator with the provided PCR values.
-func NewValidator(cfg config.QEMUVTPM, log vtpm.AttestationLogger) *Validator {
+func NewValidator(cfg *config.QEMUVTPM, log attestation.Logger) *Validator {
 	return &Validator{
 		Validator: vtpm.NewValidator(
 			cfg.Measurements,

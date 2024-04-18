@@ -17,18 +17,22 @@ package azure
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
+	"strconv"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v4"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v2"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v5"
 	"github.com/konvera/geth-sev/constellation/cloud"
 	"github.com/konvera/geth-sev/constellation/cloud/azureshared"
 	"github.com/konvera/geth-sev/constellation/cloud/metadata"
+	"github.com/konvera/geth-sev/constellation/constants"
 	"github.com/konvera/geth-sev/constellation/role"
+	"k8s.io/kubernetes/pkg/util/iptables"
+	"k8s.io/utils/exec"
 )
 
 // Cloud provides Azure metadata and API access.
@@ -97,102 +101,28 @@ func New(ctx context.Context) (*Cloud, error) {
 	}, nil
 }
 
-// GetCCMConfig returns the configuration needed for the Kubernetes Cloud Controller Manager on Azure.
-func (c *Cloud) GetCCMConfig(ctx context.Context, providerID string, cloudServiceAccountURI string) ([]byte, error) {
-	subscriptionID, resourceGroup, err := azureshared.BasicsFromProviderID(providerID)
-	if err != nil {
-		return nil, fmt.Errorf("parsing provider ID: %w", err)
-	}
-	creds, err := azureshared.ApplicationCredentialsFromURI(cloudServiceAccountURI)
-	if err != nil {
-		return nil, fmt.Errorf("parsing service account URI: %w", err)
-	}
-	uid, err := c.imds.uid(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("retrieving instance UID: %w", err)
-	}
-
-	securityGroupName, err := c.getNetworkSecurityGroupName(ctx, resourceGroup, uid)
-	if err != nil {
-		return nil, fmt.Errorf("retrieving network security group name: %w", err)
-	}
-
-	loadBalancer, err := c.getLoadBalancer(ctx, resourceGroup, uid)
-	if err != nil {
-		return nil, fmt.Errorf("retrieving load balancer: %w", err)
-	}
-	if loadBalancer == nil || loadBalancer.Name == nil {
-		return nil, fmt.Errorf("could not dereference load balancer name")
-	}
-
-	var uamiClientID string
-	useManagedIdentityExtension := creds.PreferredAuthMethod == azureshared.AuthMethodUserAssignedIdentity
-	if useManagedIdentityExtension {
-		uamiClientID, err = c.getUAMIClientIDFromURI(ctx, providerID, creds.UamiResourceID)
-		if err != nil {
-			return nil, fmt.Errorf("retrieving user-assigned managed identity client ID: %w", err)
-		}
-	}
-
-	config := cloudConfig{
-		Cloud:                       "AzurePublicCloud",
-		TenantID:                    creds.TenantID,
-		SubscriptionID:              subscriptionID,
-		ResourceGroup:               resourceGroup,
-		LoadBalancerSku:             "standard",
-		SecurityGroupName:           securityGroupName,
-		LoadBalancerName:            *loadBalancer.Name,
-		UseInstanceMetadata:         true,
-		VMType:                      "vmss",
-		Location:                    creds.Location,
-		UseManagedIdentityExtension: useManagedIdentityExtension,
-		UserAssignedIdentityID:      uamiClientID,
-		AADClientID:                 creds.AppClientID,
-		AADClientSecret:             creds.ClientSecretValue,
-	}
-
-	return json.Marshal(config)
-}
-
 // GetLoadBalancerEndpoint retrieves the first load balancer IP from cloud provider metadata.
 //
 // The returned string is an IP address without a port, but the method name needs to satisfy the
 // metadata interface.
-func (c *Cloud) GetLoadBalancerEndpoint(ctx context.Context) (string, error) {
-	resourceGroup, err := c.imds.resourceGroup(ctx)
-	if err != nil {
-		return "", fmt.Errorf("retrieving resource group: %w", err)
-	}
-	uid, err := c.imds.uid(ctx)
-	if err != nil {
-		return "", fmt.Errorf("retrieving instance UID: %w", err)
-	}
+func (c *Cloud) GetLoadBalancerEndpoint(ctx context.Context) (host, port string, retErr error) {
+	var multiErr error
 
-	lb, err := c.getLoadBalancer(ctx, resourceGroup, uid)
-	if err != nil {
-		return "", fmt.Errorf("retrieving load balancer: %w", err)
+	// Try to retrieve the public IP first
+	hostname, err := c.getLoadBalancerPublicIP(ctx)
+	if err == nil {
+		return hostname, strconv.FormatInt(constants.KubernetesPort, 10), nil
 	}
-	if lb == nil || lb.Properties == nil {
-		return "", errors.New("could not dereference load balancer IP configuration")
-	}
+	multiErr = fmt.Errorf("retrieving load balancer public IP: %w", err)
 
-	var pubIP string
-	for _, fipConf := range lb.Properties.FrontendIPConfigurations {
-		if fipConf == nil || fipConf.Properties == nil || fipConf.Properties.PublicIPAddress == nil || fipConf.Properties.PublicIPAddress.ID == nil {
-			continue
-		}
-		pubIP = path.Base(*fipConf.Properties.PublicIPAddress.ID)
-		break
+	// If that fails, try to retrieve the private IP
+	hostname, err = c.getLoadBalancerPrivateIP(ctx)
+	if err == nil {
+		return hostname, strconv.FormatInt(constants.KubernetesPort, 10), nil
 	}
+	multiErr = errors.Join(multiErr, fmt.Errorf("retrieving load balancer private IP: %w", err))
 
-	resp, err := c.pubIPAPI.Get(ctx, resourceGroup, pubIP, nil)
-	if err != nil {
-		return "", fmt.Errorf("retrieving load balancer public IP address: %w", err)
-	}
-	if resp.Properties == nil || resp.Properties.IPAddress == nil {
-		return "", fmt.Errorf("could not resolve public IP address reference for load balancer")
-	}
-	return *resp.Properties.IPAddress, nil
+	return "", "", multiErr
 }
 
 // List retrieves all instances belonging to the current constellation.
@@ -315,24 +245,6 @@ func (c *Cloud) getInstance(ctx context.Context, providerID string) (metadata.In
 	return instance, nil
 }
 
-func (c *Cloud) getUAMIClientIDFromURI(ctx context.Context, providerID, resourceID string) (string, error) {
-	// userAssignedIdentityURI := "/subscriptions/{subscription-id}/resourcegroups/{resource-group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identity-name}"
-	_, resourceGroup, scaleSet, instanceID, err := azureshared.ScaleSetInformationFromProviderID(providerID)
-	if err != nil {
-		return "", fmt.Errorf("invalid provider ID: %w", err)
-	}
-	vmResp, err := c.scaleSetsVMAPI.Get(ctx, resourceGroup, scaleSet, instanceID, nil)
-	if err != nil {
-		return "", fmt.Errorf("retrieving instance: %w", err)
-	}
-	for rID, v := range vmResp.Identity.UserAssignedIdentities {
-		if rID == resourceID {
-			return *v.ClientID, nil
-		}
-	}
-	return "", fmt.Errorf("no user assinged identity found for resource ID %s", resourceID)
-}
-
 // getNetworkSecurityGroupName returns the security group name of the resource group.
 func (c *Cloud) getNetworkSecurityGroupName(ctx context.Context, resourceGroup, uid string) (string, error) {
 	pager := c.secGroupAPI.NewListPager(resourceGroup, nil)
@@ -411,26 +323,182 @@ func (c *Cloud) getVMInterfaces(ctx context.Context, vm armcompute.VirtualMachin
 	return networkInterfaces, nil
 }
 
-type cloudConfig struct {
-	Cloud                       string `json:"cloud,omitempty"`
-	TenantID                    string `json:"tenantId,omitempty"`
-	SubscriptionID              string `json:"subscriptionId,omitempty"`
-	ResourceGroup               string `json:"resourceGroup,omitempty"`
-	Location                    string `json:"location,omitempty"`
-	SubnetName                  string `json:"subnetName,omitempty"`
-	SecurityGroupName           string `json:"securityGroupName,omitempty"`
-	SecurityGroupResourceGroup  string `json:"securityGroupResourceGroup,omitempty"`
-	LoadBalancerName            string `json:"loadBalancerName,omitempty"`
-	LoadBalancerSku             string `json:"loadBalancerSku,omitempty"`
-	VNetName                    string `json:"vnetName,omitempty"`
-	VNetResourceGroup           string `json:"vnetResourceGroup,omitempty"`
-	CloudProviderBackoff        bool   `json:"cloudProviderBackoff,omitempty"`
-	UseInstanceMetadata         bool   `json:"useInstanceMetadata,omitempty"`
-	VMType                      string `json:"vmType,omitempty"`
-	UseManagedIdentityExtension bool   `json:"useManagedIdentityExtension,omitempty"`
-	UserAssignedIdentityID      string `json:"userAssignedIdentityID,omitempty"`
-	AADClientID                 string `json:"aadClientId,omitempty"`
-	AADClientSecret             string `json:"aadClientSecret,omitempty"`
+// getLoadBalancerPrivateIP retrieves the first load balancer IP from cloud provider metadata.
+func (c *Cloud) getLoadBalancerPrivateIP(ctx context.Context) (string, error) {
+	resourceGroup, err := c.imds.resourceGroup(ctx)
+	if err != nil {
+		return "", fmt.Errorf("retrieving resource group: %w", err)
+	}
+	uid, err := c.imds.uid(ctx)
+	if err != nil {
+		return "", fmt.Errorf("retrieving instance UID: %w", err)
+	}
+
+	lb, err := c.getLoadBalancer(ctx, resourceGroup, uid)
+	if err != nil {
+		return "", fmt.Errorf("retrieving load balancer: %w", err)
+	}
+	if lb == nil || lb.Properties == nil {
+		return "", errors.New("could not dereference load balancer IP configuration")
+	}
+
+	var privIP string
+	for _, fipConf := range lb.Properties.FrontendIPConfigurations {
+		if fipConf != nil && fipConf.Properties != nil && fipConf.Properties.PrivateIPAddress != nil {
+			privIP = *fipConf.Properties.PrivateIPAddress
+			break
+		}
+	}
+	if privIP == "" {
+		return "", errors.New("could not resolve private IP address for load balancer")
+	}
+
+	return privIP, nil
+}
+
+// getLoadBalancerPublicIP retrieves the first load balancer IP from cloud provider metadata.
+func (c *Cloud) getLoadBalancerPublicIP(ctx context.Context) (string, error) {
+	resourceGroup, err := c.imds.resourceGroup(ctx)
+	if err != nil {
+		return "", fmt.Errorf("retrieving resource group: %w", err)
+	}
+	uid, err := c.imds.uid(ctx)
+	if err != nil {
+		return "", fmt.Errorf("retrieving instance UID: %w", err)
+	}
+
+	lb, err := c.getLoadBalancer(ctx, resourceGroup, uid)
+	if err != nil {
+		return "", fmt.Errorf("retrieving load balancer: %w", err)
+	}
+	if lb == nil || lb.Properties == nil {
+		return "", errors.New("could not dereference load balancer IP configuration")
+	}
+
+	var pubIP string
+	for _, fipConf := range lb.Properties.FrontendIPConfigurations {
+		if fipConf == nil || fipConf.Properties == nil || fipConf.Properties.PublicIPAddress == nil || fipConf.Properties.PublicIPAddress.ID == nil {
+			continue
+		}
+		pubIP = path.Base(*fipConf.Properties.PublicIPAddress.ID)
+		break
+	}
+
+	resp, err := c.pubIPAPI.Get(ctx, resourceGroup, pubIP, nil)
+	if err != nil {
+		return "", fmt.Errorf("retrieving load balancer public IP address: %w", err)
+	}
+	if resp.Properties == nil || resp.Properties.IPAddress == nil {
+		return "", fmt.Errorf("could not resolve public IP address reference for load balancer")
+	}
+	return *resp.Properties.IPAddress, nil
+}
+
+/*
+// TODO(malt3): uncomment and use as soon as we switch the primary endpoint to DNS.
+// Addition from 3u13r: We have to think about how to handle DNS for internal load balancers
+// that only have a private IP address and therefore no DNS name by default.
+//
+// getLoadBalancerDNSName retrieves the dns name of the load balancer.
+// On Azure, the DNS name is the DNS name of the public IP address of the load balancer.
+func (c *Cloud) getLoadBalancerDNSName(ctx context.Context) (string, error) {
+	resourceGroup, err := c.imds.resourceGroup(ctx)
+	if err != nil {
+		return "", fmt.Errorf("retrieving resource group: %w", err)
+	}
+	uid, err := c.imds.uid(ctx)
+	if err != nil {
+		return "", fmt.Errorf("retrieving instance UID: %w", err)
+	}
+
+	lb, err := c.getLoadBalancer(ctx, resourceGroup, uid)
+	if err != nil {
+		return "", fmt.Errorf("retrieving load balancer: %w", err)
+	}
+	if lb == nil || lb.Properties == nil {
+		return "", errors.New("could not dereference load balancer IP configuration")
+	}
+
+	var pubIP string
+	for _, fipConf := range lb.Properties.FrontendIPConfigurations {
+		if fipConf == nil || fipConf.Properties == nil || fipConf.Properties.PublicIPAddress == nil || fipConf.Properties.PublicIPAddress.ID == nil {
+			continue
+		}
+		pubIP = path.Base(*fipConf.Properties.PublicIPAddress.ID)
+		break
+	}
+
+	resp, err := c.pubIPAPI.Get(ctx, resourceGroup, pubIP, nil)
+	if err != nil {
+		return "", fmt.Errorf("retrieving load balancer public IP address: %w", err)
+	}
+	if resp.Properties == nil || resp.Properties.DNSSettings == nil || resp.Properties.DNSSettings.Fqdn == nil {
+		return "", fmt.Errorf("could not resolve public IP address fqdn for load balancer")
+	}
+	return *resp.Properties.DNSSettings.Fqdn, nil
+}
+*/
+
+// PrepareControlPlaneNode sets up iptables for the control plane node only
+// if an internal load balancer is used.
+//
+// This is needed since during `kubeadm init` the API server must talk to the
+// kubeAPIEndpoint, which is the load balancer IP address. During that time, the
+// only healthy VM is the VM itself. Therefore, traffic is sent to the load balancer
+// and the 5-tuple is (VM IP, <some port>, LB IP, 6443, TCP).
+// Now the load balancer does not re-write the source IP address only the destination (DNAT).
+// Therefore the 5-tuple is (VM IP, <some port>, VM IP, 6443, TCP).
+// Now the VM responds to the SYN packet with a SYN-ACK packet, but the outgoing
+// connection waits on a response from the load balancer and not the VM therefore
+// dropping the packet.
+//
+// OpenShift also uses the same mechanism to redirect traffic to the API server:
+// https://github.com/openshift/machine-config-operator/blob/e453bd20bac0e48afa74e9a27665abaf454d93cd/templates/master/00-master/azure/files/opt-libexec-openshift-azure-routes-sh.yaml
+func (c *Cloud) PrepareControlPlaneNode(ctx context.Context, log *slog.Logger) error {
+	selfMetadata, err := c.Self(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get self metadata: %w", err)
+	}
+
+	// skipping iptables setup for worker nodes
+	if selfMetadata.Role != role.ControlPlane {
+		log.Info("not a control plane node, skipping iptables setup")
+		return nil
+	}
+
+	// skipping iptables setup if no internal LB exists e.g.
+	// for public LB architectures
+	loadbalancerIP, err := c.getLoadBalancerPrivateIP(ctx)
+	if err != nil {
+		log.With(slog.Any("error", err)).Warn("skipping iptables setup, failed to get load balancer private IP")
+		return nil
+	}
+
+	log.Info(fmt.Sprintf("Setting up iptables for control plane node with load balancer IP %s", loadbalancerIP))
+
+	iptablesExec := iptables.New(exec.New(), iptables.ProtocolIPv4)
+	if err != nil {
+		return fmt.Errorf("failed to create iptables client: %w", err)
+	}
+
+	const chainName = "azure-lb-nat"
+	if _, err := iptablesExec.EnsureChain(iptables.TableNAT, chainName); err != nil {
+		return fmt.Errorf("failed to create iptables chain: %w", err)
+	}
+
+	if _, err := iptablesExec.EnsureRule(iptables.Append, iptables.TableNAT, "PREROUTING", "-j", chainName); err != nil {
+		return fmt.Errorf("failed to add rule to iptables chain: %w", err)
+	}
+
+	if _, err := iptablesExec.EnsureRule(iptables.Append, iptables.TableNAT, "OUTPUT", "-j", chainName); err != nil {
+		return fmt.Errorf("failed to add rule to iptables chain: %w", err)
+	}
+
+	if _, err := iptablesExec.EnsureRule(iptables.Append, iptables.TableNAT, chainName, "--dst", loadbalancerIP, "-p", "tcp", "--dport", "6443", "-j", "REDIRECT"); err != nil {
+		return fmt.Errorf("failed to add rule to iptables chain: %w", err)
+	}
+
+	return nil
 }
 
 // convertToInstanceMetadata converts a armcomputev2.VirtualMachineScaleSetVM to a metadata.InstanceMetadata.

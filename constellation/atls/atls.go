@@ -25,8 +25,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/crypto"
-	"github.com/konvera/geth-sev/constellation/variant"
 )
 
 const attestationTimeout = 30 * time.Second
@@ -96,7 +96,7 @@ func getATLSConfigForClientFunc(issuer Issuer, validators []Validator) (func(*tl
 	}
 
 	// this function will be called once for every client
-	return func(chi *tls.ClientHelloInfo) (*tls.Config, error) {
+	return func(_ *tls.ClientHelloInfo) (*tls.Config, error) {
 		// generate nonce for this connection
 		serverNonce, err := crypto.GenerateRandomBytes(crypto.RNGLengthDefault)
 		if err != nil {
@@ -200,6 +200,7 @@ func processCertificate(rawCerts [][]byte, _ [][]*x509.Certificate) (*x509.Certi
 
 // verifyEmbeddedReport verifies an aTLS certificate by validating the attestation document embedded in the TLS certificate.
 func verifyEmbeddedReport(validators []Validator, cert *x509.Certificate, hash, nonce []byte) error {
+	var exts []string
 	for _, ex := range cert.Extensions {
 		for _, validator := range validators {
 			if ex.Id.Equal(validator.OID()) {
@@ -216,9 +217,10 @@ func verifyEmbeddedReport(validators []Validator, cert *x509.Certificate, hash, 
 				return nil
 			}
 		}
+		exts = append(exts, ex.Id.String())
 	}
 
-	return errors.New("certificate does not contain attestation document")
+	return fmt.Errorf("certificate does not contain compatible attestation documents: got extension OIDs %#v", exts)
 }
 
 func hashPublicKey(pub any) ([]byte, error) {

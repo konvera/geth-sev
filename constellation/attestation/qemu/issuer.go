@@ -10,8 +10,9 @@ import (
 	"context"
 	"io"
 
+	"github.com/konvera/geth-sev/constellation/attestation"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/attestation/vtpm"
-	"github.com/konvera/geth-sev/constellation/variant"
 	tpmclient "github.com/google/go-tpm-tools/client"
 )
 
@@ -22,7 +23,7 @@ type Issuer struct {
 }
 
 // NewIssuer initializes a new QEMU Issuer.
-func NewIssuer(log vtpm.AttestationLogger) *Issuer {
+func NewIssuer(log attestation.Logger) *Issuer {
 	return &Issuer{
 		Issuer: vtpm.NewIssuer(
 			vtpm.OpenVTPM,
