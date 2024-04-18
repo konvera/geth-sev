@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 package crypto
 
 import (
+	"crypto/x509"
 	"testing"
 
 	"github.com/konvera/geth-sev/constellation/crypto/testvector"
@@ -16,7 +17,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	goleak.VerifyTestMain(m, goleak.IgnoreAnyFunction("github.com/bazelbuild/rules_go/go/tools/bzltestutil.RegisterTimeoutHandler.func1"))
 }
 
 func TestDeriveKey(t *testing.T) {
@@ -118,4 +119,59 @@ func TestGenerateRandomBytes(t *testing.T) {
 	n3, err := GenerateRandomBytes(16)
 	require.NoError(err)
 	assert.Len(n3, 16)
+}
+
+func TestPemToX509Cert(t *testing.T) {
+	testCases := map[string]struct {
+		pemCert []byte
+		wantErr bool
+	}{
+		// TODO(msanft): Add more test cases with testdata
+		"invalid cert": {
+			pemCert: []byte("invalid"),
+			wantErr: true,
+		},
+		"empty cert": {
+			pemCert: []byte{},
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+
+			_, err := PemToX509Cert(tc.pemCert)
+			if tc.wantErr {
+				assert.Error(err)
+			} else {
+				assert.NoError(err)
+			}
+		})
+	}
+}
+
+func TestX509ToPemCert(t *testing.T) {
+	testCases := map[string]struct {
+		cert    *x509.Certificate
+		wantErr bool
+	}{
+		"success": {
+			cert: &x509.Certificate{},
+		},
+		// TODO(msanft): Add more test cases with testdata
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+
+			_, err := X509CertToPem(tc.cert)
+			if tc.wantErr {
+				assert.Error(err)
+			} else {
+				assert.NoError(err)
+			}
+		})
+	}
 }

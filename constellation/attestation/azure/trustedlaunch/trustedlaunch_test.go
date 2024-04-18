@@ -15,6 +15,7 @@ import (
 	"crypto/x509/pkix"
 	"io"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -26,12 +27,16 @@ import (
 	"github.com/konvera/geth-sev/constellation/logger"
 	tpmclient "github.com/google/go-tpm-tools/client"
 	"github.com/google/go-tpm-tools/proto/attest"
-	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/legacy/tpm2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGetAttestationCert(t *testing.T) {
+	cgo := os.Getenv("CGO_ENABLED")
+	if cgo == "0" {
+		t.Skip("skipping test because CGO is disabled and tpm simulator requires it")
+	}
 	require := require.New(t)
 	tpm, err := simulator.OpenSimulatedTPM()
 	require.NoError(err)
@@ -99,7 +104,7 @@ func TestGetAttestationCert(t *testing.T) {
 		wantValidateErr bool
 	}{
 		"success": {
-			crlServer: func(req *http.Request) *http.Response {
+			crlServer: func(_ *http.Request) *http.Response {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(bytes.NewReader(intermediateCert.Raw)),
@@ -131,14 +136,14 @@ func TestGetAttestationCert(t *testing.T) {
 			},
 		},
 		"intermediate cert cannot be fetched": {
-			crlServer: func(req *http.Request) *http.Response {
+			crlServer: func(_ *http.Request) *http.Response {
 				return &http.Response{StatusCode: http.StatusNotFound}
 			},
 			getAkCert:    defaultAkCertFunc,
 			wantIssueErr: true,
 		},
 		"intermediate cert is not signed by root cert": {
-			crlServer: func(req *http.Request) *http.Response {
+			crlServer: func(_ *http.Request) *http.Response {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(bytes.NewReader(rootCert.Raw)),
@@ -148,7 +153,7 @@ func TestGetAttestationCert(t *testing.T) {
 			wantValidateErr: true,
 		},
 		"ak does not match ak cert public key": {
-			crlServer: func(req *http.Request) *http.Response {
+			crlServer: func(_ *http.Request) *http.Response {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(bytes.NewReader(intermediateCert.Raw)),
@@ -201,7 +206,7 @@ func TestGetAttestationCert(t *testing.T) {
 				},
 			}
 
-			validator := NewValidator(config.AzureTrustedLaunch{Measurements: measurements.M{}}, nil)
+			validator := NewValidator(&config.AzureTrustedLaunch{Measurements: measurements.M{}}, nil)
 			cert, err := x509.ParseCertificate(rootCert.Raw)
 			require.NoError(err)
 			roots := x509.NewCertPool()

@@ -9,8 +9,6 @@ package aws
 import (
 	"context"
 	"errors"
-	"io"
-	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -19,7 +17,7 @@ import (
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbTypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
-	tagTypes "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
+	rgtTypes "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
 
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/konvera/geth-sev/constellation/cloud"
@@ -29,11 +27,9 @@ import (
 )
 
 func TestSelf(t *testing.T) {
-	someErr := errors.New("failed")
-
 	testCases := map[string]struct {
 		imds     *stubIMDS
-		ec2      *stubEC2
+		ec2API   *stubEC2
 		wantSelf metadata.InstanceMetadata
 		wantErr  bool
 	}{
@@ -46,8 +42,24 @@ func TestSelf(t *testing.T) {
 						PrivateIP:        "192.0.2.1",
 					},
 				},
-				tags: map[string]string{
-					cloud.TagRole: "controlplane",
+			},
+			ec2API: &stubEC2{
+				selfInstance: &ec2.DescribeInstancesOutput{
+					Reservations: []ec2Types.Reservation{
+						{
+							Instances: []ec2Types.Instance{
+								{
+									InstanceId: aws.String("test-instance-id"),
+									Tags: []ec2Types.Tag{
+										{
+											Key:   aws.String(cloud.TagRole),
+											Value: aws.String("controlplane"),
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 			wantSelf: metadata.InstanceMetadata{
@@ -66,9 +78,28 @@ func TestSelf(t *testing.T) {
 						PrivateIP:        "192.0.2.1",
 					},
 				},
-				tags: map[string]string{
-					cloud.TagRole:           "worker",
-					cloud.TagInitSecretHash: "initSecretHash",
+			},
+			ec2API: &stubEC2{
+				selfInstance: &ec2.DescribeInstancesOutput{
+					Reservations: []ec2Types.Reservation{
+						{
+							Instances: []ec2Types.Instance{
+								{
+									InstanceId: aws.String("test-instance-id"),
+									Tags: []ec2Types.Tag{
+										{
+											Key:   aws.String(cloud.TagRole),
+											Value: aws.String("worker"),
+										},
+										{
+											Key:   aws.String(cloud.TagInitSecretHash),
+											Value: aws.String("initSecretHash"),
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 			wantSelf: metadata.InstanceMetadata{
@@ -80,15 +111,30 @@ func TestSelf(t *testing.T) {
 		},
 		"get instance document error": {
 			imds: &stubIMDS{
-				getInstanceIdentityDocumentErr: someErr,
-				tags: map[string]string{
-					tagName:       "test-instance",
-					cloud.TagRole: "controlplane",
+				getInstanceIdentityDocumentErr: assert.AnError,
+			},
+			ec2API: &stubEC2{
+				selfInstance: &ec2.DescribeInstancesOutput{
+					Reservations: []ec2Types.Reservation{
+						{
+							Instances: []ec2Types.Instance{
+								{
+									InstanceId: aws.String("test-instance-id"),
+									Tags: []ec2Types.Tag{
+										{
+											Key:   aws.String(cloud.TagRole),
+											Value: aws.String("controlplane"),
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 			wantErr: true,
 		},
-		"get metadata error": {
+		"get instance error": {
 			imds: &stubIMDS{
 				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
 					InstanceIdentityDocument: imds.InstanceIdentityDocument{
@@ -97,7 +143,9 @@ func TestSelf(t *testing.T) {
 						PrivateIP:        "192.0.2.1",
 					},
 				},
-				getMetadataErr: someErr,
+			},
+			ec2API: &stubEC2{
+				describeInstancesErr: assert.AnError,
 			},
 			wantErr: true,
 		},
@@ -110,8 +158,19 @@ func TestSelf(t *testing.T) {
 						PrivateIP:        "192.0.2.1",
 					},
 				},
-				tags: map[string]string{
-					tagName: "test-instance",
+			},
+			ec2API: &stubEC2{
+				selfInstance: &ec2.DescribeInstancesOutput{
+					Reservations: []ec2Types.Reservation{
+						{
+							Instances: []ec2Types.Instance{
+								{
+									InstanceId: aws.String("test-instance-id"),
+									Tags:       []ec2Types.Tag{},
+								},
+							},
+						},
+					},
 				},
 			},
 			wantErr: true,
@@ -121,7 +180,10 @@ func TestSelf(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
-			m := &Cloud{imds: tc.imds, ec2: &stubEC2{}}
+			m := &Cloud{
+				imds: tc.imds,
+				ec2:  tc.ec2API,
+			}
 
 			self, err := m.Self(context.Background())
 			if tc.wantErr {
@@ -151,10 +213,6 @@ func TestList(t *testing.T) {
 						},
 						Tags: []ec2Types.Tag{
 							{
-								Key:   aws.String(tagName),
-								Value: aws.String("name-1"),
-							},
-							{
 								Key:   aws.String(cloud.TagRole),
 								Value: aws.String("controlplane"),
 							},
@@ -173,10 +231,6 @@ func TestList(t *testing.T) {
 						},
 						Tags: []ec2Types.Tag{
 							{
-								Key:   aws.String(tagName),
-								Value: aws.String("name-2"),
-							},
-							{
 								Key:   aws.String(cloud.TagRole),
 								Value: aws.String("worker"),
 							},
@@ -192,29 +246,52 @@ func TestList(t *testing.T) {
 	}
 
 	testCases := map[string]struct {
-		imds     *stubIMDS
+		imdsAPI  *stubIMDS
 		ec2      *stubEC2
 		wantList []metadata.InstanceMetadata
 		wantErr  bool
 	}{
 		"success single page": {
-			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
+			imdsAPI: &stubIMDS{
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						InstanceID: "id-1",
+					},
 				},
 			},
 			ec2: &stubEC2{
+				selfInstance: &ec2.DescribeInstancesOutput{
+					Reservations: []ec2Types.Reservation{
+						{
+							Instances: []ec2Types.Instance{
+								{
+									InstanceId: aws.String("id-1"),
+									Tags: []ec2Types.Tag{
+										{
+											Key:   aws.String(cloud.TagRole),
+											Value: aws.String("controlplane"),
+										},
+										{
+											Key:   aws.String(cloud.TagUID),
+											Value: aws.String("uid"),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
 				describeInstancesResp1: successfulResp,
 			},
 			wantList: []metadata.InstanceMetadata{
 				{
-					Name:       "name-1",
+					Name:       "id-1",
 					Role:       role.ControlPlane,
 					ProviderID: "aws:///test-zone/id-1",
 					VPCIP:      "192.0.2.1",
 				},
 				{
-					Name:       "name-2",
+					Name:       "id-2",
 					Role:       role.Worker,
 					ProviderID: "aws:///test-zone/id-2",
 					VPCIP:      "192.0.2.2",
@@ -222,12 +299,35 @@ func TestList(t *testing.T) {
 			},
 		},
 		"success multiple pages": {
-			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
+			imdsAPI: &stubIMDS{
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						InstanceID: "id-1",
+					},
 				},
 			},
 			ec2: &stubEC2{
+				selfInstance: &ec2.DescribeInstancesOutput{
+					Reservations: []ec2Types.Reservation{
+						{
+							Instances: []ec2Types.Instance{
+								{
+									InstanceId: aws.String("id-1"),
+									Tags: []ec2Types.Tag{
+										{
+											Key:   aws.String(cloud.TagRole),
+											Value: aws.String("controlplane"),
+										},
+										{
+											Key:   aws.String(cloud.TagUID),
+											Value: aws.String("uid"),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
 				describeInstancesResp1: &ec2.DescribeInstancesOutput{
 					Reservations: []ec2Types.Reservation{
 						{
@@ -240,10 +340,6 @@ func TestList(t *testing.T) {
 										AvailabilityZone: aws.String("test-zone-2"),
 									},
 									Tags: []ec2Types.Tag{
-										{
-											Key:   aws.String(tagName),
-											Value: aws.String("name-3"),
-										},
 										{
 											Key:   aws.String(cloud.TagRole),
 											Value: aws.String("worker"),
@@ -263,19 +359,19 @@ func TestList(t *testing.T) {
 			},
 			wantList: []metadata.InstanceMetadata{
 				{
-					Name:       "name-3",
+					Name:       "id-3",
 					Role:       role.Worker,
 					ProviderID: "aws:///test-zone-2/id-3",
 					VPCIP:      "192.0.2.3",
 				},
 				{
-					Name:       "name-1",
+					Name:       "id-1",
 					Role:       role.ControlPlane,
 					ProviderID: "aws:///test-zone/id-1",
 					VPCIP:      "192.0.2.1",
 				},
 				{
-					Name:       "name-2",
+					Name:       "id-2",
 					Role:       role.Worker,
 					ProviderID: "aws:///test-zone/id-2",
 					VPCIP:      "192.0.2.2",
@@ -283,16 +379,41 @@ func TestList(t *testing.T) {
 			},
 		},
 		"fail to get UID": {
-			imds: &stubIMDS{},
+			imdsAPI: &stubIMDS{
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						InstanceID: "id-1",
+					},
+				},
+			},
 			ec2: &stubEC2{
+				selfInstance: &ec2.DescribeInstancesOutput{
+					Reservations: []ec2Types.Reservation{
+						{
+							Instances: []ec2Types.Instance{
+								{
+									InstanceId: aws.String("id-1"),
+									Tags: []ec2Types.Tag{
+										{
+											Key:   aws.String(cloud.TagRole),
+											Value: aws.String("controlplane"),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
 				describeInstancesResp1: successfulResp,
 			},
 			wantErr: true,
 		},
 		"describe instances fails": {
-			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
+			imdsAPI: &stubIMDS{
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						InstanceID: "id-1",
+					},
 				},
 			},
 			ec2: &stubEC2{
@@ -305,7 +426,10 @@ func TestList(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
-			m := &Cloud{ec2: tc.ec2, imds: tc.imds}
+			m := &Cloud{
+				imds: tc.imdsAPI,
+				ec2:  tc.ec2,
+			}
 
 			list, err := m.List(context.Background())
 			if tc.wantErr {
@@ -321,171 +445,129 @@ func TestList(t *testing.T) {
 
 func TestGetLoadBalancerEndpoint(t *testing.T) {
 	lbAddr := "192.0.2.1"
-	someErr := errors.New("some error")
+	successfulEC2 := &stubEC2{
+		selfInstance: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2Types.Reservation{
+				{
+					Instances: []ec2Types.Instance{
+						{
+							InstanceId: aws.String("id-1"),
+							Tags: []ec2Types.Tag{
+								{
+									Key:   aws.String(cloud.TagRole),
+									Value: aws.String("controlplane"),
+								},
+								{
+									Key:   aws.String(cloud.TagUID),
+									Value: aws.String("uid"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 
 	testCases := map[string]struct {
 		imds         *stubIMDS
 		loadbalancer *stubLoadbalancer
 		resourceapi  *stubResourceGroupTagging
-		wantAddr     string
+		wantHost     string
 		wantErr      bool
 	}{
-		"success retrieving loadbalancer endpoint": {
+		"success": {
 			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						AvailabilityZone: "test-zone",
+					},
 				},
 			},
 			loadbalancer: &stubLoadbalancer{
 				describeLoadBalancersOut: &elasticloadbalancingv2.DescribeLoadBalancersOutput{
 					LoadBalancers: []elbTypes.LoadBalancer{
 						{
+							LoadBalancerName: aws.String("test-lb"),
 							AvailabilityZones: []elbTypes.AvailabilityZone{
 								{
-									LoadBalancerAddresses: []elbTypes.LoadBalancerAddress{
-										{
-											IpAddress: aws.String(lbAddr),
-										},
-									},
+									ZoneName: aws.String("test-zone"),
 								},
 							},
+							DNSName: aws.String(lbAddr),
 						},
 					},
 				},
 			},
 			resourceapi: &stubResourceGroupTagging{
 				getResourcesOut1: &resourcegroupstaggingapi.GetResourcesOutput{
-					ResourceTagMappingList: []tagTypes.ResourceTagMapping{
-						{
-							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-loadbalancer/50dc6c495c0c9188"),
-						},
-					},
-				},
-			},
-			wantAddr: lbAddr,
-		},
-		"too many ARNs": {
-			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
-				},
-			},
-			loadbalancer: &stubLoadbalancer{
-				describeLoadBalancersOut: &elasticloadbalancingv2.DescribeLoadBalancersOutput{
-					LoadBalancers: []elbTypes.LoadBalancer{
-						{
-							AvailabilityZones: []elbTypes.AvailabilityZone{
-								{
-									LoadBalancerAddresses: []elbTypes.LoadBalancerAddress{
-										{
-											IpAddress: aws.String(lbAddr),
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			resourceapi: &stubResourceGroupTagging{
-				getResourcesOut1: &resourcegroupstaggingapi.GetResourcesOutput{
-					ResourceTagMappingList: []tagTypes.ResourceTagMapping{
-						{
-							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-loadbalancer/50dc6c495c0c9188"),
-						},
-						{
-							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-loadbalancer/50dc6c495c0c9188"),
-						},
-					},
-				},
-			},
-			wantErr: true,
-		},
-		"too many ARNs (paged)": {
-			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
-				},
-			},
-			loadbalancer: &stubLoadbalancer{
-				describeLoadBalancersOut: &elasticloadbalancingv2.DescribeLoadBalancersOutput{
-					LoadBalancers: []elbTypes.LoadBalancer{
-						{
-							AvailabilityZones: []elbTypes.AvailabilityZone{
-								{
-									LoadBalancerAddresses: []elbTypes.LoadBalancerAddress{
-										{
-											IpAddress: aws.String(lbAddr),
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			resourceapi: &stubResourceGroupTagging{
-				getResourcesOut1: &resourcegroupstaggingapi.GetResourcesOutput{
-					ResourceTagMappingList: []tagTypes.ResourceTagMapping{
-						{
-							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-loadbalancer/50dc6c495c0c9188"),
-						},
-					},
-					PaginationToken: aws.String("token"),
+					PaginationToken: aws.String("next-token"),
 				},
 				getResourcesOut2: &resourcegroupstaggingapi.GetResourcesOutput{
-					ResourceTagMappingList: []tagTypes.ResourceTagMapping{
+					ResourceTagMappingList: []rgtTypes.ResourceTagMapping{
 						{
-							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-loadbalancer/50dc6c495c0c9188"),
+							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-lb/1234567890abcdef"),
+							Tags: []rgtTypes.Tag{
+								{
+									Key:   aws.String(cloud.TagUID),
+									Value: aws.String("uid"),
+								},
+							},
 						},
 					},
 				},
 			},
-			wantErr: true,
+			wantHost: lbAddr,
 		},
-		"loadbalancer has no availability zones": {
+		"no load balancer found": {
 			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						AvailabilityZone: "test-zone",
+					},
 				},
 			},
 			loadbalancer: &stubLoadbalancer{
 				describeLoadBalancersOut: &elasticloadbalancingv2.DescribeLoadBalancersOutput{
-					LoadBalancers: []elbTypes.LoadBalancer{
-						{
-							AvailabilityZones: []elbTypes.AvailabilityZone{},
-						},
-					},
+					LoadBalancers: []elbTypes.LoadBalancer{},
 				},
 			},
 			resourceapi: &stubResourceGroupTagging{
 				getResourcesOut1: &resourcegroupstaggingapi.GetResourcesOutput{
-					ResourceTagMappingList: []tagTypes.ResourceTagMapping{
+					PaginationToken: aws.String("next-token"),
+				},
+				getResourcesOut2: &resourcegroupstaggingapi.GetResourcesOutput{
+					ResourceTagMappingList: []rgtTypes.ResourceTagMapping{
 						{
-							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-loadbalancer/50dc6c495c0c9188"),
+							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-lb/1234567890abcdef"),
+							Tags: []rgtTypes.Tag{
+								{
+									Key:   aws.String(cloud.TagUID),
+									Value: aws.String("uid"),
+								},
+							},
 						},
 					},
 				},
 			},
 			wantErr: true,
 		},
-		"failure to get resources by tag": {
+		"no load balancer DNS name": {
 			imds: &stubIMDS{
-				tags: map[string]string{
-					cloud.TagUID: "uid",
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						AvailabilityZone: "test-zone",
+					},
 				},
 			},
 			loadbalancer: &stubLoadbalancer{
 				describeLoadBalancersOut: &elasticloadbalancingv2.DescribeLoadBalancersOutput{
 					LoadBalancers: []elbTypes.LoadBalancer{
 						{
+							LoadBalancerName: aws.String("test-lb"),
 							AvailabilityZones: []elbTypes.AvailabilityZone{
 								{
-									LoadBalancerAddresses: []elbTypes.LoadBalancerAddress{
-										{
-											IpAddress: aws.String(lbAddr),
-										},
-									},
+									ZoneName: aws.String("test-zone"),
 								},
 							},
 						},
@@ -493,7 +575,110 @@ func TestGetLoadBalancerEndpoint(t *testing.T) {
 				},
 			},
 			resourceapi: &stubResourceGroupTagging{
-				getResourcesErr: someErr,
+				getResourcesOut1: &resourcegroupstaggingapi.GetResourcesOutput{
+					PaginationToken: aws.String("next-token"),
+				},
+				getResourcesOut2: &resourcegroupstaggingapi.GetResourcesOutput{
+					ResourceTagMappingList: []rgtTypes.ResourceTagMapping{
+						{
+							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-lb/1234567890abcdef"),
+							Tags: []rgtTypes.Tag{
+								{
+									Key:   aws.String(cloud.TagUID),
+									Value: aws.String("uid"),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		"describe load balancers fails": {
+			imds: &stubIMDS{
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{
+						AvailabilityZone: "test-zone",
+					},
+				},
+			},
+			resourceapi: &stubResourceGroupTagging{
+				getResourcesOut1: &resourcegroupstaggingapi.GetResourcesOutput{
+					PaginationToken: aws.String("next-token"),
+				},
+				getResourcesOut2: &resourcegroupstaggingapi.GetResourcesOutput{
+					ResourceTagMappingList: []rgtTypes.ResourceTagMapping{
+						{
+							ResourceARN: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-lb/1234567890abcdef"),
+							Tags: []rgtTypes.Tag{
+								{
+									Key:   aws.String(cloud.TagUID),
+									Value: aws.String("uid"),
+								},
+							},
+						},
+					},
+				},
+			},
+			loadbalancer: &stubLoadbalancer{
+				describeLoadBalancersErr: assert.AnError,
+			},
+			wantErr: true,
+		},
+		"get resources fails": {
+			imds: &stubIMDS{
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{},
+				},
+			},
+			loadbalancer: &stubLoadbalancer{
+				describeLoadBalancersOut: &elasticloadbalancingv2.DescribeLoadBalancersOutput{
+					LoadBalancers: []elbTypes.LoadBalancer{
+						{
+							LoadBalancerName: aws.String("test-lb"),
+							AvailabilityZones: []elbTypes.AvailabilityZone{
+								{
+									ZoneName: aws.String("test-zone"),
+								},
+							},
+							DNSName: aws.String(lbAddr),
+						},
+					},
+				},
+			},
+			resourceapi: &stubResourceGroupTagging{
+				getResourcesErr: assert.AnError,
+			},
+			wantErr: true,
+		},
+		"no resources found": {
+			imds: &stubIMDS{
+				instanceDocumentResp: &imds.GetInstanceIdentityDocumentOutput{
+					InstanceIdentityDocument: imds.InstanceIdentityDocument{},
+				},
+			},
+			loadbalancer: &stubLoadbalancer{
+				describeLoadBalancersOut: &elasticloadbalancingv2.DescribeLoadBalancersOutput{
+					LoadBalancers: []elbTypes.LoadBalancer{
+						{
+							LoadBalancerName: aws.String("test-lb"),
+							AvailabilityZones: []elbTypes.AvailabilityZone{
+								{
+									ZoneName: aws.String("test-zone"),
+								},
+							},
+							DNSName: aws.String(lbAddr),
+						},
+					},
+				},
+			},
+			resourceapi: &stubResourceGroupTagging{
+				getResourcesOut1: &resourcegroupstaggingapi.GetResourcesOutput{
+					PaginationToken: aws.String("next-token"),
+				},
+				getResourcesOut2: &resourcegroupstaggingapi.GetResourcesOutput{
+					ResourceTagMappingList: []rgtTypes.ResourceTagMapping{},
+				},
 			},
 			wantErr: true,
 		},
@@ -506,16 +691,18 @@ func TestGetLoadBalancerEndpoint(t *testing.T) {
 				imds:              tc.imds,
 				loadbalancer:      tc.loadbalancer,
 				resourceapiClient: tc.resourceapi,
+				ec2:               successfulEC2,
 			}
 
-			endpoint, err := m.GetLoadBalancerEndpoint(context.Background())
+			gotHost, gotPort, err := m.GetLoadBalancerEndpoint(context.Background())
 			if tc.wantErr {
 				assert.Error(err)
 				return
 			}
 
 			assert.NoError(err)
-			assert.Equal(tc.wantAddr, endpoint)
+			assert.Equal(tc.wantHost, gotHost)
+			assert.Equal("6443", gotPort)
 		})
 	}
 }
@@ -537,10 +724,6 @@ func TestConvertToMetadataInstance(t *testing.T) {
 					},
 					Tags: []ec2Types.Tag{
 						{
-							Key:   aws.String(tagName),
-							Value: aws.String("name-1"),
-						},
-						{
 							Key:   aws.String(cloud.TagRole),
 							Value: aws.String("controlplane"),
 						},
@@ -549,7 +732,7 @@ func TestConvertToMetadataInstance(t *testing.T) {
 			},
 			wantInstances: []metadata.InstanceMetadata{
 				{
-					Name:       "name-1",
+					Name:       "id-1",
 					Role:       role.ControlPlane,
 					ProviderID: "aws:///test-zone/id-1",
 					VPCIP:      "192.0.2.1",
@@ -564,10 +747,6 @@ func TestConvertToMetadataInstance(t *testing.T) {
 					PrivateIpAddress: aws.String("192.0.2.1"),
 					Tags: []ec2Types.Tag{
 						{
-							Key:   aws.String(tagName),
-							Value: aws.String("name-1"),
-						},
-						{
 							Key:   aws.String(cloud.TagRole),
 							Value: aws.String("controlplane"),
 						},
@@ -577,7 +756,7 @@ func TestConvertToMetadataInstance(t *testing.T) {
 
 			wantInstances: []metadata.InstanceMetadata{
 				{
-					Name:       "name-1",
+					Name:       "id-1",
 					Role:       role.ControlPlane,
 					ProviderID: "aws:///id-1",
 					VPCIP:      "192.0.2.1",
@@ -604,10 +783,6 @@ func TestConvertToMetadataInstance(t *testing.T) {
 					},
 					Tags: []ec2Types.Tag{
 						{
-							Key:   aws.String(tagName),
-							Value: aws.String("name-1"),
-						},
-						{
 							Key:   aws.String(cloud.TagRole),
 							Value: aws.String("controlplane"),
 						},
@@ -621,29 +796,6 @@ func TestConvertToMetadataInstance(t *testing.T) {
 				{
 					State:      &ec2Types.InstanceState{Name: ec2Types.InstanceStateNameRunning},
 					InstanceId: aws.String("id-1"),
-					Placement: &ec2Types.Placement{
-						AvailabilityZone: aws.String("test-zone"),
-					},
-					Tags: []ec2Types.Tag{
-						{
-							Key:   aws.String(tagName),
-							Value: aws.String("name-1"),
-						},
-						{
-							Key:   aws.String(cloud.TagRole),
-							Value: aws.String("controlplane"),
-						},
-					},
-				},
-			},
-			wantErr: true,
-		},
-		"missing name tag": {
-			in: []ec2Types.Instance{
-				{
-					State:            &ec2Types.InstanceState{Name: ec2Types.InstanceStateNameRunning},
-					InstanceId:       aws.String("id-1"),
-					PrivateIpAddress: aws.String("192.0.2.1"),
 					Placement: &ec2Types.Placement{
 						AvailabilityZone: aws.String("test-zone"),
 					},
@@ -666,12 +818,7 @@ func TestConvertToMetadataInstance(t *testing.T) {
 					Placement: &ec2Types.Placement{
 						AvailabilityZone: aws.String("test-zone"),
 					},
-					Tags: []ec2Types.Tag{
-						{
-							Key:   aws.String(tagName),
-							Value: aws.String("name-1"),
-						},
-					},
+					Tags: []ec2Types.Tag{},
 				},
 			},
 			wantErr: true,
@@ -696,41 +843,35 @@ func TestConvertToMetadataInstance(t *testing.T) {
 }
 
 type stubIMDS struct {
-	getInstanceIdentityDocumentErr error
-	getMetadataErr                 error
 	instanceDocumentResp           *imds.GetInstanceIdentityDocumentOutput
-	tags                           map[string]string
+	getInstanceIdentityDocumentErr error
 }
 
 func (s *stubIMDS) GetInstanceIdentityDocument(context.Context, *imds.GetInstanceIdentityDocumentInput, ...func(*imds.Options)) (*imds.GetInstanceIdentityDocumentOutput, error) {
 	return s.instanceDocumentResp, s.getInstanceIdentityDocumentErr
 }
 
-func (s *stubIMDS) GetMetadata(_ context.Context, in *imds.GetMetadataInput, _ ...func(*imds.Options)) (*imds.GetMetadataOutput, error) {
-	tag, ok := s.tags[strings.TrimPrefix(in.Path, "/tags/instance/")]
-	if !ok {
-		return nil, errors.New("not found")
-	}
-	return &imds.GetMetadataOutput{
-		Content: io.NopCloser(
-			strings.NewReader(
-				tag,
-			),
-		),
-	}, s.getMetadataErr
-}
-
 type stubEC2 struct {
 	describeInstancesErr   error
+	selfInstance           *ec2.DescribeInstancesOutput
 	describeInstancesResp1 *ec2.DescribeInstancesOutput
 	describeInstancesResp2 *ec2.DescribeInstancesOutput
+	describeAddressesErr   error
+	describeAddressesResp  *ec2.DescribeAddressesOutput
 }
 
 func (s *stubEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	if len(in.InstanceIds) == 1 {
+		return s.selfInstance, s.describeInstancesErr
+	}
 	if in.NextToken == nil {
 		return s.describeInstancesResp1, s.describeInstancesErr
 	}
 	return s.describeInstancesResp2, s.describeInstancesErr
+}
+
+func (s *stubEC2) DescribeAddresses(context.Context, *ec2.DescribeAddressesInput, ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error) {
+	return s.describeAddressesResp, s.describeAddressesErr
 }
 
 type stubLoadbalancer struct {

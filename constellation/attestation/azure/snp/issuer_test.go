@@ -13,10 +13,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/konvera/geth-sev/constellation/attestation/simulator"
+	"github.com/konvera/geth-sev/constellation/attestation/snp"
 	"github.com/edgelesssys/go-azguestattestation/maa"
-	tpmclient "github.com/google/go-tpm-tools/client"
-	"github.com/google/go-tpm/tpm2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,53 +96,17 @@ func TestGetSNPAttestation(t *testing.T) {
 				assert.Equal(data, maa.gotTokenData)
 			}
 
-			var instanceInfo azureInstanceInfo
+			var instanceInfo snp.InstanceInfo
 			err = json.Unmarshal(attestationJSON, &instanceInfo)
 			require.NoError(err)
 
-			assert.Equal(params.VcekCert, instanceInfo.Vcek)
+			assert.Equal(params.VcekCert, instanceInfo.ReportSigner)
 			assert.Equal(params.VcekChain, instanceInfo.CertChain)
 			assert.Equal(params.SNPReport, instanceInfo.AttestationReport)
-			assert.Equal(params.RuntimeData, instanceInfo.RuntimeData)
-			assert.Equal(tc.maaToken, instanceInfo.MAAToken)
+			assert.Equal(params.RuntimeData, instanceInfo.Azure.RuntimeData)
+			assert.Equal(tc.maaToken, instanceInfo.Azure.MAAToken)
 		})
 	}
-}
-
-// TestGetHCLAttestationKey is a basic smoke test that only checks if getAkPub can be run error free.
-// Testing anything else will only verify that the simulator works as expected, since getAkPub
-// only retrieves the attestation key from the TPM.
-func TestGetHCLAttestationKey(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-
-	tpm, err := simulator.OpenSimulatedTPM()
-	require.NoError(err)
-	defer tpm.Close()
-
-	// we should receive an error if no key was saved at index `tpmAkIdx`
-	_, err = getAttestationKey(tpm)
-	assert.Error(err)
-
-	// create a key at the index
-	tpmAk, err := tpmclient.NewCachedKey(tpm, tpm2.HandleOwner, tpm2.Public{
-		Type:       tpm2.AlgRSA,
-		NameAlg:    tpm2.AlgSHA256,
-		Attributes: tpm2.FlagFixedTPM | tpm2.FlagFixedParent | tpm2.FlagSensitiveDataOrigin | tpm2.FlagUserWithAuth | tpm2.FlagNoDA | tpm2.FlagRestricted | tpm2.FlagSign,
-		RSAParameters: &tpm2.RSAParams{
-			Sign: &tpm2.SigScheme{
-				Alg:  tpm2.AlgRSASSA,
-				Hash: tpm2.AlgSHA256,
-			},
-			KeyBits: 2048,
-		},
-	}, tpmAkIdx)
-	require.NoError(err)
-	defer tpmAk.Close()
-
-	// we should now be able to retrieve the key
-	_, err = getAttestationKey(tpm)
-	assert.NoError(err)
 }
 
 type stubImdsClient struct {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,14 +20,17 @@ import (
 	"github.com/go-playground/validator/v10"
 	"golang.org/x/mod/semver"
 
+	"github.com/konvera/geth-sev/constellation/api/versionsapi"
 	"github.com/konvera/geth-sev/constellation/attestation/measurements"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/cloud/cloudprovider"
 	"github.com/konvera/geth-sev/constellation/compatibility"
+	"github.com/konvera/geth-sev/constellation/config/disktypes"
 	"github.com/konvera/geth-sev/constellation/config/instancetypes"
 	"github.com/konvera/geth-sev/constellation/constants"
-	"github.com/konvera/geth-sev/constellation/variant"
+	"github.com/konvera/geth-sev/constellation/role"
+	consemver "github.com/konvera/geth-sev/constellation/semver"
 	"github.com/konvera/geth-sev/constellation/versions"
-	"github.com/konvera/geth-sev/constellation/versionsapi"
 )
 
 // ValidationError occurs when the validation of a config fails.
@@ -85,11 +89,11 @@ func translateInvalidK8sVersionError(ut ut.Translator, fe validator.FieldError) 
 	configured = compatibility.EnsurePrefixV(configured)
 	switch {
 	case !semver.IsValid(configured):
-		errorMsg = "The configured version is not a valid semantic version"
+		errorMsg = "The configured version is not a valid semantic version\n"
 	case semver.Compare(configured, minVersion) == -1:
-		errorMsg = fmt.Sprintf("The configured version %s is older than the oldest version supported by this CLI: %s", configured, minVersion)
+		errorMsg = fmt.Sprintf("The configured version %s is older than the oldest version supported by this CLI: %s\n", configured, minVersion)
 	case semver.Compare(configured, maxVersion) == 1:
-		errorMsg = fmt.Sprintf("The configured version %s is newer than the newest version supported by this CLI: %s", configured, maxVersion)
+		errorMsg = fmt.Sprintf("The configured version %s is newer than the newest version supported by this CLI: %s\n", configured, maxVersion)
 	}
 
 	errorMsg = errorMsg + fmt.Sprintf("Supported versions: %s", strings.Join(validVersionsSorted, " "))
@@ -99,21 +103,53 @@ func translateInvalidK8sVersionError(ut ut.Translator, fe validator.FieldError) 
 	return t
 }
 
-func validateAWSInstanceType(fl validator.FieldLevel) bool {
-	return validInstanceTypeForProvider(fl.Field().String(), false, cloudprovider.AWS)
+func validateAWSRegionField(fl validator.FieldLevel) bool {
+	return ValidateAWSRegion(fl.Field().String())
 }
 
-func (c *Config) validateAzureInstanceType(fl validator.FieldLevel) bool {
-	attestVariant, err := variant.FromString(c.AttestationVariant)
-	if err != nil {
-		return false
-	}
-	acceptNonCVM := attestVariant.Equal(variant.AzureTrustedLaunch{})
-	return validInstanceTypeForProvider(fl.Field().String(), acceptNonCVM, cloudprovider.Azure)
+func validateAWSZoneField(fl validator.FieldLevel) bool {
+	return ValidateAWSZone(fl.Field().String())
 }
 
-func validateGCPInstanceType(fl validator.FieldLevel) bool {
-	return validInstanceTypeForProvider(fl.Field().String(), false, cloudprovider.GCP)
+func validateAzureZoneField(fl validator.FieldLevel) bool {
+	return ValidateAzureZone(fl.Field().String())
+}
+
+func validateGCPZoneField(fl validator.FieldLevel) bool {
+	return ValidateGCPZone(fl.Field().String())
+}
+
+func validateOpenStackRegionField(fl validator.FieldLevel) bool {
+	return ValidateOpenStackRegion(fl.Field().String())
+}
+
+// ValidateAWSZone validates that the zone is in the correct format.
+func ValidateAWSZone(zone string) bool {
+	awsZoneRegex := regexp.MustCompile(`^\w+-\w+-[1-9][abc]$`)
+	return awsZoneRegex.MatchString(zone)
+}
+
+// ValidateAzureZone validates that the zone is in the correct format.
+func ValidateAzureZone(zone string) bool {
+	azureZoneRegex := regexp.MustCompile(`^$|^\d+(?:,\d+)*$`)
+	return azureZoneRegex.MatchString(zone)
+}
+
+// ValidateGCPZone validates that the zone is in the correct format.
+func ValidateGCPZone(zone string) bool {
+	gcpZoneRegex := regexp.MustCompile(`^[\w-]+-[a-z]$`)
+	return gcpZoneRegex.MatchString(zone)
+}
+
+// ValidateOpenStackRegion validates that the region is in the correct format.
+func ValidateOpenStackRegion(region string) bool {
+	return len(region) > 0
+}
+
+// ValidateAWSRegion validates that the region is in the correct format.
+func ValidateAWSRegion(region string) bool {
+	awsRegionRegex := regexp.MustCompile(`^\w+-\w+-[1-9]$`)
+	return awsRegionRegex.MatchString(region)
 }
 
 // validateProvider checks if zero or more than one providers are defined in the config.
@@ -144,22 +180,301 @@ func validateProvider(sl validator.StructLevel) {
 	}
 }
 
-func registerTranslateAWSInstanceTypeError(ut ut.Translator) error {
-	return ut.Add("aws_instance_type", fmt.Sprintf("{0} must be an instance from one of the following families types with size xlarge or higher: %v", instancetypes.AWSSupportedInstanceFamilies), true)
+func validateAttestation(sl validator.StructLevel) {
+	attestation := sl.Current().Interface().(AttestationConfig)
+	attestationCount := 0
+
+	if attestation.AWSSEVSNP != nil {
+		attestationCount++
+	}
+	if attestation.AWSNitroTPM != nil {
+		attestationCount++
+	}
+	if attestation.AzureSEVSNP != nil {
+		attestationCount++
+	}
+	if attestation.AzureTDX != nil {
+		attestationCount++
+	}
+	if attestation.AzureTrustedLaunch != nil {
+		attestationCount++
+	}
+	if attestation.GCPSEVES != nil {
+		attestationCount++
+	}
+	if attestation.GCPSEVSNP != nil {
+		attestationCount++
+	}
+	if attestation.QEMUVTPM != nil {
+		attestationCount++
+	}
+
+	if attestationCount < 1 {
+		sl.ReportError(attestation, "Attestation", "Attestation", "no_attestation", "")
+	} else if attestationCount > 1 {
+		sl.ReportError(attestation, "Attestation", "Attestation", "more_than_one_attestation", "")
+	}
 }
 
-func translateAWSInstanceTypeError(ut ut.Translator, fe validator.FieldError) string {
-	t, _ := ut.T("aws_instance_type", fe.Field())
+func validateNodeGroups(sl validator.StructLevel) {
+	nodeGroups := sl.Current().Interface().(Config).NodeGroups
+	defaultControlPlaneGroup, hasDefaultControlPlaneGroup := nodeGroups[constants.DefaultControlPlaneGroupName]
+	defaultWorkerGroup, hasDefaultWorkerGroup := nodeGroups[constants.DefaultWorkerGroupName]
+
+	if !hasDefaultControlPlaneGroup {
+		sl.ReportError(nodeGroups, "NodeGroups", "NodeGroups", "no_default_control_plane_group", "")
+	}
+	if !hasDefaultWorkerGroup {
+		sl.ReportError(nodeGroups, "NodeGroups", "NodeGroups", "no_default_worker_group", "")
+	}
+
+	if hasDefaultControlPlaneGroup {
+		if defaultControlPlaneGroup.Role != role.ControlPlane.TFString() {
+			sl.ReportError(nodeGroups, "NodeGroups", "NodeGroups", "control_plane_group_role_mismatch", "")
+		}
+		if defaultControlPlaneGroup.InitialCount < 1 {
+			sl.ReportError(nodeGroups, "NodeGroups", "NodeGroups", "control_plane_group_initial_count", "")
+		}
+	}
+	if hasDefaultWorkerGroup {
+		if defaultWorkerGroup.Role != role.Worker.TFString() {
+			sl.ReportError(nodeGroups, "NodeGroups", "NodeGroups", "worker_group_role_mismatch", "")
+		}
+	}
+}
+
+func translateNoAttestationError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("no_attestation", fe.Field())
+
+	return t
+}
+
+func registerNoAttestationError(ut ut.Translator) error {
+	return ut.Add("no_attestation", "{0}: No attestation has been defined (requires either awsSEVSNP, awsNitroTPM, azureSEVSNP, azureTDX, azureTrustedLaunch, gcpSEVES, or qemuVTPM)", true)
+}
+
+func translateNoDefaultControlPlaneGroupError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("no_default_control_plane_group", fe.Field())
+
+	return t
+}
+
+func registerNoDefaultControlPlaneGroupError(ut ut.Translator) error {
+	return ut.Add("no_default_control_plane_group", "{0}: No default control plane group (control_plane_default) has been defined", true)
+}
+
+func translateNoDefaultWorkerGroupError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("no_default_worker_group", fe.Field())
+
+	return t
+}
+
+func registerNoDefaultWorkerGroupError(ut ut.Translator) error {
+	return ut.Add("no_default_worker_group", "{0}: No default worker group (worker_default) has been defined", true)
+}
+
+func translateControlPlaneGroupInitialCountError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("control_plane_group_initial_count", fe.Field())
+
+	return t
+}
+
+func registerControlPlaneGroupInitialCountError(ut ut.Translator) error {
+	return ut.Add("control_plane_group_initial_count", "{0}: The default control plane group (control_plane_default) must have at least one node", true)
+}
+
+func translateControlPlaneGroupRoleMismatchError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("control_plane_group_role_mismatch", fe.Field())
+
+	return t
+}
+
+func registerControlPlaneGroupRoleMismatchError(ut ut.Translator) error {
+	return ut.Add("control_plane_group_role_mismatch", "{0}: The default control plane group (control_plane_default) must have the \"control-plane\" role", true)
+}
+
+func translateWorkerGroupRoleMismatchError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("worker_group_role_mismatch", fe.Field())
+
+	return t
+}
+
+func registerWorkerGroupRoleMismatchError(ut ut.Translator) error {
+	return ut.Add("worker_group_role_mismatch", "{0}: The default worker group (worker_default) must have the \"worker\" role", true)
+}
+
+func registerValidZoneError(ut ut.Translator) error {
+	return ut.Add("valid_zone", "{0}: has invalid format: {1}", true)
+}
+
+func (c *Config) translateValidZoneError(ut ut.Translator, fe validator.FieldError) string {
+	var t string
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		t, _ = ut.T("valid_zone", fe.Field(), "field must be of format eu-central-1a")
+	case cloudprovider.Azure:
+		t, _ = ut.T("valid_zone", fe.Field(), "field must be a comma separated list of zones: 1,2,3 (or empty for all zones)")
+	case cloudprovider.GCP:
+		t, _ = ut.T("valid_zone", fe.Field(), "field must be of format europe-west3-b")
+	default:
+		t, _ = ut.T("valid_zone", fe.Field(), "field must not be empty")
+	}
+	return t
+}
+
+func registerAWSRegionError(ut ut.Translator) error {
+	return ut.Add("aws_region", "{0}: has invalid format: {1}", true)
+}
+
+func translateAWSRegionError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("aws_region", fe.Field(), "field must be of format eu-central-1")
+
+	return t
+}
+
+func translateAWSZoneError(ut ut.Translator, fe validator.FieldError) string {
+	t, _ := ut.T("aws_zone", fe.Field(), "field must be of format eu-central-1a")
+
+	return t
+}
+
+func registerAWSZoneError(ut ut.Translator) error {
+	return ut.Add("aws_zone", "{0}: has invalid format: {1}", true)
+}
+
+func registerMoreThanOneAttestationError(ut ut.Translator) error {
+	return ut.Add("more_than_one_attestation", "{0}: Only one attestation can be defined ({1} are defined)", true)
+}
+
+func (c *Config) translateMoreThanOneAttestationError(ut ut.Translator, fe validator.FieldError) string {
+	definedAttestations := make([]string, 0)
+
+	if c.Attestation.AWSNitroTPM != nil {
+		definedAttestations = append(definedAttestations, "AWSNitroTPM")
+	}
+	if c.Attestation.AWSSEVSNP != nil {
+		definedAttestations = append(definedAttestations, "AWSSEVSNP")
+	}
+	if c.Attestation.AzureSEVSNP != nil {
+		definedAttestations = append(definedAttestations, "AzureSEVSNP")
+	}
+	if c.Attestation.AzureTDX != nil {
+		definedAttestations = append(definedAttestations, "AzureTDX")
+	}
+	if c.Attestation.AzureTrustedLaunch != nil {
+		definedAttestations = append(definedAttestations, "AzureTrustedLaunch")
+	}
+	if c.Attestation.GCPSEVES != nil {
+		definedAttestations = append(definedAttestations, "GCPSEVES")
+	}
+	if c.Attestation.GCPSEVSNP != nil {
+		definedAttestations = append(definedAttestations, "GCPSEVSNP")
+	}
+	if c.Attestation.QEMUVTPM != nil {
+		definedAttestations = append(definedAttestations, "QEMUVTPM")
+	}
+
+	t, _ := ut.T("more_than_one_attestation", fe.Field(), strings.Join(definedAttestations, ", "))
+
+	return t
+}
+
+func registerTranslateDiskTypeError(ut ut.Translator) error {
+	return ut.Add("disk_type", "{0} must be one of {1}", true)
+}
+
+func (c *Config) translateDiskTypeError(ut ut.Translator, fe validator.FieldError) string {
+	var supported []string
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		supported = disktypes.AWSDiskTypes
+	case cloudprovider.Azure:
+		supported = disktypes.AzureDiskTypes
+	case cloudprovider.GCP:
+		supported = disktypes.GCPDiskTypes
+	}
+
+	t, _ := ut.T("disk_type", fe.Field(), fmt.Sprintf("%v", supported))
+	return t
+}
+
+func (c *Config) registerTranslateInstanceTypeError(ut ut.Translator) error {
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		return registerTranslateAWSInstanceTypeError(ut)
+	case cloudprovider.Azure:
+		return registerTranslateAzureInstanceTypeError(ut)
+	case cloudprovider.GCP:
+		return registerTranslateGCPInstanceTypeError(ut)
+	}
+	return ut.Add("instance_type", "{0} is an invalid instance type", true)
+}
+
+func (c *Config) translateInstanceTypeError(ut ut.Translator, fe validator.FieldError) string {
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		return c.translateAWSInstanceTypeError(ut, fe)
+	case cloudprovider.Azure:
+		return c.translateAzureInstanceTypeError(ut, fe)
+	case cloudprovider.GCP:
+		return translateGCPInstanceTypeError(ut, fe)
+	}
+	t, _ := ut.T("instance_type", fe.Field())
+
+	return t
+}
+
+func registerTranslateAWSInstanceTypeError(ut ut.Translator) error {
+	return ut.Add("instance_type", "{0} must be an instance from one of the following families types with size xlarge or higher: {1}", true)
+}
+
+func (c *Config) translateAWSInstanceTypeError(ut ut.Translator, fe validator.FieldError) string {
+	var t string
+
+	attestVariant := c.GetAttestationConfig().GetVariant()
+
+	instances := instancetypes.AWSSNPSupportedInstanceFamilies
+	if attestVariant.Equal(variant.AWSNitroTPM{}) {
+		instances = instancetypes.AWSSupportedInstanceFamilies
+	}
+
+	t, _ = ut.T("instance_type", fe.Field(), fmt.Sprintf("%v", instances))
 
 	return t
 }
 
 func registerTranslateGCPInstanceTypeError(ut ut.Translator) error {
-	return ut.Add("gcp_instance_type", fmt.Sprintf("{0} must be one of %v", instancetypes.GCPInstanceTypes), true)
+	return ut.Add("instance_type", fmt.Sprintf("{0} must be one of %v", instancetypes.GCPInstanceTypes), true)
 }
 
 func translateGCPInstanceTypeError(ut ut.Translator, fe validator.FieldError) string {
-	t, _ := ut.T("gcp_instance_type", fe.Field())
+	t, _ := ut.T("instance_type", fe.Field())
+
+	return t
+}
+
+// Validation translation functions for Azure & GCP instance type errors.
+func registerTranslateAzureInstanceTypeError(ut ut.Translator) error {
+	return ut.Add("instance_type", "{0} must be one of {1}", true)
+}
+
+func (c *Config) translateAzureInstanceTypeError(ut ut.Translator, fe validator.FieldError) string {
+	// Suggest trusted launch VMs if confidential VMs have been specifically disabled
+	var t string
+
+	attestVariant := c.GetAttestationConfig().GetVariant()
+
+	var instances []string
+	switch attestVariant.String() {
+	case variant.AzureTrustedLaunch{}.String():
+		instances = instancetypes.AzureTrustedLaunchInstanceTypes
+	case variant.AzureSEVSNP{}.String():
+		instances = instancetypes.AzureSNPInstanceTypes
+	case variant.AzureTDX{}.String():
+		instances = instancetypes.AzureTDXInstanceTypes
+	}
+
+	t, _ = ut.T("instance_type", fe.Field(), fmt.Sprintf("%v", instances))
 
 	return t
 }
@@ -205,39 +520,42 @@ func (c *Config) translateMoreThanOneProviderError(ut ut.Translator, fe validato
 	return t
 }
 
-func validInstanceTypeForProvider(insType string, acceptNonCVM bool, provider cloudprovider.Provider) bool {
-	switch provider {
-	case cloudprovider.AWS:
-		return checkIfAWSInstanceTypeIsValid(insType)
-	case cloudprovider.Azure:
-		if acceptNonCVM {
-			for _, instanceType := range instancetypes.AzureTrustedLaunchInstanceTypes {
-				if insType == instanceType {
-					return true
-				}
-			}
-		} else {
-			for _, instanceType := range instancetypes.AzureCVMInstanceTypes {
-				if insType == instanceType {
-					return true
-				}
+func validInstanceTypeForProvider(insType string, attestation variant.Variant) bool {
+	switch attestation {
+	case variant.AWSSEVSNP{}, variant.AWSNitroTPM{}:
+		return isSupportedAWSInstanceType(insType, attestation.Equal(variant.AWSNitroTPM{}))
+	case variant.AzureSEVSNP{}:
+		for _, instanceType := range instancetypes.AzureSNPInstanceTypes {
+			if insType == instanceType {
+				return true
 			}
 		}
-		return false
-	case cloudprovider.GCP:
+	case variant.AzureTDX{}:
+		for _, instanceType := range instancetypes.AzureTDXInstanceTypes {
+			if insType == instanceType {
+				return true
+			}
+		}
+	case variant.AzureTrustedLaunch{}:
+		for _, instanceType := range instancetypes.AzureTrustedLaunchInstanceTypes {
+			if insType == instanceType {
+				return true
+			}
+		}
+	case variant.GCPSEVES{}, variant.GCPSEVSNP{}:
 		for _, instanceType := range instancetypes.GCPInstanceTypes {
 			if insType == instanceType {
 				return true
 			}
 		}
-		return false
-	default:
-		return false
+	case variant.QEMUVTPM{}, variant.QEMUTDX{}:
+		return true
 	}
+	return false
 }
 
-// checkIfAWSInstanceTypeIsValid checks if an AWS instance type passed as user input is in one of the instance families supporting NitroTPM.
-func checkIfAWSInstanceTypeIsValid(userInput string) bool {
+// isSupportedAWSInstanceType checks if an AWS instance type passed as user input is in one of the supported instance types.
+func isSupportedAWSInstanceType(userInput string, acceptNonCVM bool) bool {
 	// Check if user or code does anything weird and tries to pass multiple strings as one
 	if strings.Contains(userInput, " ") {
 		return false
@@ -264,9 +582,14 @@ func checkIfAWSInstanceTypeIsValid(userInput string) bool {
 		return false
 	}
 
+	instances := instancetypes.AWSSNPSupportedInstanceFamilies
+	if acceptNonCVM {
+		instances = instancetypes.AWSSupportedInstanceFamilies
+	}
+
 	// Now check if the user input is a supported family
 	// Note that we cannot directly use the family split from the Graviton check above, as some instances are directly specified by their full name and not just the family in general
-	for _, supportedFamily := range instancetypes.AWSSupportedInstanceFamilies {
+	for _, supportedFamily := range instances {
 		supportedFamilyLowercase := strings.ToLower(supportedFamily)
 		if userDefinedFamily == supportedFamilyLowercase {
 			return true
@@ -276,30 +599,18 @@ func checkIfAWSInstanceTypeIsValid(userInput string) bool {
 	return false
 }
 
-// Validation translation functions for Azure & GCP instance type errors.
-func registerTranslateAzureInstanceTypeError(ut ut.Translator) error {
-	return ut.Add("azure_instance_type", "{0} must be one of {1}", true)
-}
-
-func (c *Config) translateAzureInstanceTypeError(ut ut.Translator, fe validator.FieldError) string {
-	// Suggest trusted launch VMs if confidential VMs have been specifically disabled
-	var t string
-
-	attestVariant, err := variant.FromString(c.AttestationVariant)
-	if err != nil {
-		return ""
-	}
-	if attestVariant.Equal(variant.AzureTrustedLaunch{}) {
-		t, _ = ut.T("azure_instance_type", fe.Field(), fmt.Sprintf("%v", instancetypes.AzureTrustedLaunchInstanceTypes))
-	} else {
-		t, _ = ut.T("azure_instance_type", fe.Field(), fmt.Sprintf("%v", instancetypes.AzureCVMInstanceTypes))
-	}
-
-	return t
-}
-
 func validateNoPlaceholder(fl validator.FieldLevel) bool {
-	return len(getPlaceholderEntries(fl.Field().Interface().(Measurements))) == 0
+	return len(getPlaceholderEntries(fl.Field().Interface().(measurements.M))) == 0
+}
+
+// validateMeasurement acts like validateNoPlaceholder, but is used for the measurements.Measurement type.
+func validateMeasurement(sl validator.StructLevel) {
+	measurement := sl.Current().Interface().(measurements.Measurement)
+	actual := measurement.Expected
+	placeHolder := measurements.PlaceHolderMeasurement(measurements.PCRMeasurementLength).Expected
+	if bytes.Equal(actual, placeHolder) {
+		sl.ReportError(measurement, "launchMeasurement", "launchMeasurement", "no_placeholders", "")
+	}
 }
 
 func registerContainsPlaceholderError(ut ut.Translator) error {
@@ -307,22 +618,30 @@ func registerContainsPlaceholderError(ut ut.Translator) error {
 }
 
 func translateContainsPlaceholderError(ut ut.Translator, fe validator.FieldError) string {
-	placeholders := getPlaceholderEntries(fe.Value().(Measurements))
-	msg := fmt.Sprintf("Measurements %v contain", placeholders)
-	if len(placeholders) == 1 {
-		msg = fmt.Sprintf("Measurement %v contains", placeholders)
+	var msg string
+	switch fe.Field() {
+	case "launchMeasurement":
+		msg = "launchMeasurement contains"
+	case "measurements":
+		placeholders := getPlaceholderEntries(fe.Value().(measurements.M))
+		msg = fmt.Sprintf("measurements %v contain", placeholders)
+		if len(placeholders) == 1 {
+			msg = fmt.Sprintf("measurement %v contains", placeholders)
+		}
 	}
 
 	t, _ := ut.T("no_placeholders", msg)
 	return t
 }
 
-func getPlaceholderEntries(m Measurements) []uint32 {
+func getPlaceholderEntries(m measurements.M) []uint32 {
 	var placeholders []uint32
-	placeholder := measurements.PlaceHolderMeasurement()
+	placeholderTDX := measurements.PlaceHolderMeasurement(measurements.TDXMeasurementLength)
+	placeholderTPM := measurements.PlaceHolderMeasurement(measurements.PCRMeasurementLength)
 
 	for idx, measurement := range m {
-		if bytes.Equal(measurement.Expected[:], placeholder.Expected[:]) {
+		if bytes.Equal(measurement.Expected, placeholderTDX.Expected) ||
+			bytes.Equal(measurement.Expected, placeholderTPM.Expected) {
 			placeholders = append(placeholders, idx)
 		}
 	}
@@ -330,107 +649,91 @@ func getPlaceholderEntries(m Measurements) []uint32 {
 	return placeholders
 }
 
+// validateK8sVersion does not check the patch version.
 func (c *Config) validateK8sVersion(fl validator.FieldLevel) bool {
-	// TODO: v2.7: do not create extendedVersion variable and directly validate field from fl.
-	// This patch is for compatibility with configs from v2.5 only. Configs specifying k8s
-	// the version as MAJOR.MINOR automatically get extended with the respective patch version.
-	configVersion := compatibility.EnsurePrefixV(fl.Field().String())
-	if !semver.IsValid(configVersion) {
-		return false
-	}
-
-	extendedVersion := K8sVersionFromMajorMinor(semver.MajorMinor(configVersion))
-	if extendedVersion == "" {
-		return false
-	}
-
-	valid := versions.IsSupportedK8sVersion(extendedVersion)
-	if !valid {
-		return false
-	}
-
-	c.KubernetesVersion = extendedVersion
-	return true
+	_, err := versions.NewValidK8sVersion(compatibility.EnsurePrefixV(fl.Field().String()), false)
+	return err == nil
 }
 
-// K8sVersionFromMajorMinor takes a semver in format MAJOR.MINOR
-// and returns the version in format MAJOR.MINOR.PATCH with the
-// supported patch version as PATCH.
-func K8sVersionFromMajorMinor(version string) string {
-	switch version {
-	case semver.MajorMinor(string(versions.V1_24)):
-		return string(versions.V1_24)
-	case semver.MajorMinor(string(versions.V1_25)):
-		return string(versions.V1_25)
-	case semver.MajorMinor(string(versions.V1_26)):
-		return string(versions.V1_26)
-	default:
-		return ""
-	}
-}
-
-func registerVersionCompatibilityError(ut ut.Translator) error {
-	return ut.Add("version_compatibility", "{0} specifies an invalid version: {1}", true)
-}
-
-func translateVersionCompatibilityError(ut ut.Translator, fe validator.FieldError) string {
-	binaryVersion := constants.VersionInfo()
-	err := validateVersionCompatibilityHelper(binaryVersion, fe.Field(), fe.Value().(string))
-	var msg string
-
-	switch {
-	case errors.Is(err, compatibility.ErrSemVer):
-		msg = fmt.Sprintf("configured version (%s) does not adhere to SemVer syntax", fe.Value().(string))
-	case errors.Is(err, compatibility.ErrMajorMismatch):
-		msg = fmt.Sprintf("the CLI's major version (%s) has to match your configured major version (%s). Use --force to ignore the version mismatch.", constants.VersionInfo(), fe.Value().(string))
-	case errors.Is(err, compatibility.ErrMinorDrift):
-		msg = fmt.Sprintf("the CLI's minor version (%s) and the configured version (%s) are more than one minor version apart. Use --force to ignore the version mismatch.", constants.VersionInfo(), fe.Value().(string))
-	case errors.Is(err, compatibility.ErrOutdatedCLI):
-		msg = fmt.Sprintf("the CLI's version (%s) is older than the configured version (%s). Use --force to ignore the version mismatch.", constants.VersionInfo(), fe.Value().(string))
-	default:
-		msg = err.Error()
-	}
-
-	t, _ := ut.T("version_compatibility", fe.Field(), msg)
-
-	return t
+func registerImageCompatibilityError(ut ut.Translator) error {
+	return ut.Add("image_compatibility", "{0} specifies an invalid version: {1}", true)
 }
 
 // Check that the validated field and the CLI version are not more than one minor version apart.
 func validateVersionCompatibility(fl validator.FieldLevel) bool {
-	binaryVersion := constants.VersionInfo()
-	if err := validateVersionCompatibilityHelper(binaryVersion, fl.FieldName(), fl.Field().String()); err != nil {
+	binaryVersion := constants.BinaryVersion()
+	if err := validateImageCompatibilityHelper(binaryVersion, fl.FieldName(), fl.Field().String()); err != nil {
 		return false
 	}
 
 	return true
 }
 
-func validateVersionCompatibilityHelper(binaryVersion, fieldName, configuredVersion string) error {
+func validateImageCompatibilityHelper(binaryVersion consemver.Semver, fieldName, configuredVersion string) error {
 	if fieldName == "image" {
 		imageVersion, err := versionsapi.NewVersionFromShortPath(configuredVersion, versionsapi.VersionKindImage)
 		if err != nil {
 			return err
 		}
-		configuredVersion = imageVersion.Version
+		configuredVersion = imageVersion.Version()
 	}
 
-	if fieldName == "microserviceVersion" {
-		cliVersion := compatibility.EnsurePrefixV(binaryVersion)
-		serviceVersion := compatibility.EnsurePrefixV(configuredVersion)
-		if semver.Compare(cliVersion, serviceVersion) == -1 {
-			return fmt.Errorf("the CLI's version (%s) is older than the configured version (%s)", cliVersion, serviceVersion)
-		}
+	return compatibility.BinaryWith(binaryVersion.String(), configuredVersion)
+}
+
+func translateImageCompatibilityError(ut ut.Translator, fe validator.FieldError) string {
+	binaryVersion := constants.BinaryVersion()
+	err := validateImageCompatibilityHelper(binaryVersion, fe.Field(), fe.Value().(string))
+
+	msg := msgFromCompatibilityError(err, binaryVersion.String(), fe.Value().(string))
+
+	t, _ := ut.T("image_compatibility", fe.Field(), msg)
+
+	return t
+}
+
+// msgFromCompatibilityError translates compatibility errors into user-facing error messages.
+func msgFromCompatibilityError(err error, binaryVersion, fieldValue string) string {
+	switch {
+	case errors.Is(err, compatibility.ErrSemVer):
+		return fmt.Sprintf("configured version (%s) does not adhere to SemVer syntax", fieldValue)
+	case errors.Is(err, compatibility.ErrMajorMismatch):
+		return fmt.Sprintf("the CLI's major version (%s) has to match your configured major version (%s). Use --force to ignore the version mismatch.", binaryVersion, fieldValue)
+	case errors.Is(err, compatibility.ErrMinorDrift):
+		return fmt.Sprintf("the CLI's minor version (%s) and the configured version (%s) are more than one minor version apart. Use --force to ignore the version mismatch.", binaryVersion, fieldValue)
+	case errors.Is(err, compatibility.ErrOutdatedCLI):
+		return fmt.Sprintf("the CLI's version (%s) is older than the configured version (%s). Use --force to ignore the version mismatch.", binaryVersion, fieldValue)
+	default:
+		return err.Error()
+	}
+}
+
+// ValidateMicroserviceVersion checks that the version of the microservice is compatible with the binary version.
+func ValidateMicroserviceVersion(binaryVersion, version consemver.Semver) error {
+	// Major versions always have to match.
+	if binaryVersion.Major() != version.Major() {
+		return compatibility.ErrMajorMismatch
+	}
+	// Allow newer CLIs (for upgrades), but dissallow newer service versions.
+	if binaryVersion.Compare(version) == -1 {
+		return compatibility.ErrOutdatedCLI
+	}
+	// Abort if minor version drift between CLI and versionA value is greater than 1.
+	if binaryVersion.Minor()-version.Minor() > 1 {
+		return compatibility.ErrMinorDrift
 	}
 
-	return compatibility.BinaryWith(binaryVersion, configuredVersion)
+	return nil
 }
 
 func returnsTrue(_ validator.FieldLevel) bool {
 	return true
 }
 
-func registerValidateNameError(ut ut.Translator) error {
+func (c *Config) registerValidateNameError(ut ut.Translator) error {
+	if c.Provider.AWS != nil {
+		return ut.Add("validate_name", "{0} must be no more than {1} characters long and contain only lowercase letters", true)
+	}
 	return ut.Add("validate_name", "{0} must be no more than {1} characters long", true)
 }
 
@@ -450,62 +753,10 @@ func (c *Config) translateValidateNameError(ut ut.Translator, fe validator.Field
 // This also allows us to eventually add more validation rules for constellation names if necessary.
 func (c *Config) validateName(fl validator.FieldLevel) bool {
 	if c.Provider.AWS != nil {
-		return len(fl.Field().String()) <= constants.AWSConstellationNameLength
+		name := fl.Field().String()
+		return strings.ToLower(name) == name && len(name) <= constants.AWSConstellationNameLength
 	}
 	return len(fl.Field().String()) <= constants.ConstellationNameLength
-}
-
-func registerValidAttestVariantError(ut ut.Translator) error {
-	return ut.Add("valid_attestation_variant", `"{0}" is not a valid attestation variant for CSP {1}`, true)
-}
-
-func (c *Config) translateValidAttestVariantError(ut ut.Translator, _ validator.FieldError) string {
-	csp := c.GetProvider()
-	t, _ := ut.T("valid_attestation_variant", c.AttestationVariant, csp.String())
-	return t
-}
-
-func (c *Config) validAttestVariant(_ validator.FieldLevel) bool {
-	// TODO(AB#3040): function will be obsolete in v2.8
-	// attestationVariant will be refactored into a required struct
-	c.addMissingVariant()
-
-	attestationVariant, err := variant.FromString(c.AttestationVariant)
-	if err != nil {
-		return false
-	}
-
-	// make sure the variant is valid for the chosen CSP
-	switch attestationVariant {
-	case variant.AWSNitroTPM{}:
-		return c.Provider.AWS != nil
-	case variant.AzureSEVSNP{}, variant.AzureTrustedLaunch{}:
-		return c.Provider.Azure != nil
-	case variant.GCPSEVES{}:
-		return c.Provider.GCP != nil
-	case variant.QEMUVTPM{}:
-		return c.Provider.QEMU != nil || c.Provider.OpenStack != nil
-	default:
-		return false
-	}
-}
-
-func (c *Config) addMissingVariant() {
-	if c.AttestationVariant != "" {
-		return
-	}
-	switch c.GetProvider() {
-	case cloudprovider.AWS:
-		c.AttestationVariant = variant.AWSNitroTPM{}.String()
-	case cloudprovider.Azure:
-		c.AttestationVariant = variant.AzureSEVSNP{}.String()
-	case cloudprovider.GCP:
-		c.AttestationVariant = variant.GCPSEVES{}.String()
-	case cloudprovider.QEMU:
-		c.AttestationVariant = variant.QEMUVTPM{}.String()
-	case cloudprovider.OpenStack:
-		c.AttestationVariant = variant.QEMUVTPM{}.String()
-	}
 }
 
 func warnDeprecated(fl validator.FieldLevel) bool {
@@ -514,5 +765,87 @@ func warnDeprecated(fl validator.FieldLevel) bool {
 		"WARNING: The config key %q is deprecated and will be removed in an upcoming version.\n",
 		fl.FieldName(),
 	)
+	return true
+}
+
+func (c *Config) validateNodeGroupZoneField(fl validator.FieldLevel) bool {
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		return validateAWSZoneField(fl)
+	case cloudprovider.Azure:
+		return validateAzureZoneField(fl)
+	case cloudprovider.GCP:
+		return validateGCPZoneField(fl)
+	case cloudprovider.OpenStack:
+		return validateOpenStackRegionField(fl)
+	case cloudprovider.QEMU:
+		// QEMU does not use zones
+		return true
+	case cloudprovider.Unknown:
+		return true
+	}
+	// this indicates we are missing a case for a new provider
+	return false
+}
+
+func (c *Config) validateInstanceType(fl validator.FieldLevel) bool {
+	return validInstanceTypeForProvider(fl.Field().String(), c.GetAttestationConfig().GetVariant())
+}
+
+func (c *Config) validateStateDiskTypeField(fl validator.FieldLevel) bool {
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		return validateAWSStateDiskField(fl)
+	case cloudprovider.Azure:
+		return validateAzureStateDiskField(fl)
+	case cloudprovider.GCP:
+		return validateGCPStateDiskField(fl)
+	case cloudprovider.OpenStack:
+		return validateOpenStackStateDiskField(fl)
+	case cloudprovider.QEMU:
+		return validateQEMUStateDiskField(fl)
+	case cloudprovider.Unknown:
+		return true
+
+	}
+	// this indicates we are missing a case for a new provider
+	return false
+}
+
+func validateAWSStateDiskField(fl validator.FieldLevel) bool {
+	gotDiskField := fl.Field().String()
+	for _, diskType := range disktypes.AWSDiskTypes {
+		if gotDiskField == diskType {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAzureStateDiskField(fl validator.FieldLevel) bool {
+	gotDiskField := fl.Field().String()
+	for _, diskType := range disktypes.AzureDiskTypes {
+		if gotDiskField == diskType {
+			return true
+		}
+	}
+	return false
+}
+
+func validateGCPStateDiskField(fl validator.FieldLevel) bool {
+	gotDiskField := fl.Field().String()
+	for _, diskType := range disktypes.GCPDiskTypes {
+		if gotDiskField == diskType {
+			return true
+		}
+	}
+	return false
+}
+
+func validateOpenStackStateDiskField(fl validator.FieldLevel) bool {
+	return len(fl.Field().String()) > 0
+}
+
+func validateQEMUStateDiskField(_ validator.FieldLevel) bool {
 	return true
 }

@@ -10,186 +10,607 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"testing"
 
+	"github.com/konvera/geth-sev/constellation/attestation"
 	"github.com/konvera/geth-sev/constellation/attestation/idkeydigest"
 	"github.com/konvera/geth-sev/constellation/attestation/simulator"
+	"github.com/konvera/geth-sev/constellation/attestation/snp/testdata"
 	"github.com/konvera/geth-sev/constellation/attestation/vtpm"
 	"github.com/konvera/geth-sev/constellation/config"
 	"github.com/konvera/geth-sev/constellation/logger"
+	"github.com/google/go-sev-guest/abi"
+	"github.com/google/go-sev-guest/kds"
+	spb "github.com/google/go-sev-guest/proto/sevsnp"
+	"github.com/google/go-sev-guest/validate"
+	"github.com/google/go-sev-guest/verify"
+	"github.com/google/go-sev-guest/verify/trust"
 	"github.com/google/go-tpm-tools/client"
 	"github.com/google/go-tpm-tools/proto/attest"
-	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/legacy/tpm2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestTrustedKeyFromSNP(t *testing.T) {
+// TestNewValidator tests the creation of a new validator.
+func TestNewValidator(t *testing.T) {
 	require := require.New(t)
 
-	tpm, err := simulator.OpenSimulatedTPM()
-	require.NoError(err)
-	defer tpm.Close()
-	key, err := client.AttestationKeyRSA(tpm)
-	require.NoError(err)
-	defer key.Close()
-	akPub, err := key.PublicArea().Encode()
-	require.NoError(err)
-
-	defaultReport := "02000000020000001f0003000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065d010000000000000000000000000000000ccc0895ef2f2c3b8c8568f5a2bb65ff5bf9387a09359742ad41e686cacfd38b00000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f7240b24a1babe2ece844c4f792bcd9844bf6907d14aeea00156310b9538daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d0000000000000000000000000000000000000000000000009e44aaef02cfca6fddbaca669c6cfd29e1ab8d97ebc939857128acbb13b8740df31436d34e86e5f8ae0cdfeb3a0e185db46decac176cc77d761c22a1b9dcf25b020000000000065d0133010001330100020000000000065d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bcb7dc15abff884802e774b39adba8e6ff7efcf05e115c91588e657065151056a320f70c788d0e3619391052922e422b000000000000000000000000000000000000000000000000e8dbf581140443bbc681c50eca8639a76ef6cab34e0780cbca977e2e2a03f8b864fd4e9774b0f8055511567e031e59bf00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c02000001000000020000000100000048020000"
-	defaultRuntimeData := "7b226b657973223a5b7b226b6964223a2248434c416b507562222c226b65795f6f7073223a5b22656e6372797074225d2c226b7479223a22525341222c2265223a2241514142222c226e223a22747946717641414166324746656c6b5737566352684a6e4132597659364c6a427a65554e3276614d5a6e5a74685f74466e574d6b4b35415874757379434e656c337569703356475a7a54617a3558327447566a4772732d4d56486361703951647771555856573367394f515f74456269786378372d78626c554a516b474551666e626253646e5049326c764c7a4f73315a5f30766a65444178765351726d616773366e592d634a4157482d706744564a79487470735553735f5142576b6c617a44736f3557486d6e4d743973394d75696c57586f7830525379586e55656151796859316a753752545363526e5658754e7936377a5f454a6e774d393264727746623841556430534a5f396f687645596c34615a52444543476f3056726a635348552d4a474a6575574335566844425235454f6f4356424267716539653833765f6c4a784933574c65326f7653495a49497a416d625351227d5d2c22766d2d636f6e66696775726174696f6e223a7b22636f6e736f6c652d656e61626c6564223a747275652c2263757272656e742d74696d65223a313636313435353339312c227365637572652d626f6f74223a66616c73652c2274706d2d656e61626c6564223a747275652c22766d556e697175654964223a2242364339384333422d344543372d344441362d424432462d374439384432304437423735227d7d"
-	defaultVCEK := "-----BEGIN CERTIFICATE-----\nMIIFTDCCAvugAwIBAgIBADBGBgkqhkiG9w0BAQowOaAPMA0GCWCGSAFlAwQCAgUA\noRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAgUAogMCATCjAwIBATB7MRQwEgYD\nVQQLDAtFbmdpbmVlcmluZzELMAkGA1UEBhMCVVMxFDASBgNVBAcMC1NhbnRhIENs\nYXJhMQswCQYDVQQIDAJDQTEfMB0GA1UECgwWQWR2YW5jZWQgTWljcm8gRGV2aWNl\nczESMBAGA1UEAwwJU0VWLU1pbGFuMB4XDTIyMDYyOTE2MzEzMFoXDTI5MDYyOTE2\nMzEzMFowejEUMBIGA1UECwwLRW5naW5lZXJpbmcxCzAJBgNVBAYTAlVTMRQwEgYD\nVQQHDAtTYW50YSBDbGFyYTELMAkGA1UECAwCQ0ExHzAdBgNVBAoMFkFkdmFuY2Vk\nIE1pY3JvIERldmljZXMxETAPBgNVBAMMCFNFVi1WQ0VLMHYwEAYHKoZIzj0CAQYF\nK4EEACIDYgAEhPX8Cl9uA7PxqNGzeqamJNYJLx/VFE/s3+8qOWtaztKNcn1PaAI4\nndE+yaVfMHsiA8CLTylumpWXcVBHPYV9kPEVrtozhvrrT5Oii9OpZPYHJ7/WPVmM\nJ3K8/Iz3AshTo4IBFjCCARIwEAYJKwYBBAGceAEBBAMCAQAwFwYJKwYBBAGceAEC\nBAoWCE1pbGFuLUIwMBEGCisGAQQBnHgBAwEEAwIBAjARBgorBgEEAZx4AQMCBAMC\nAQAwEQYKKwYBBAGceAEDBAQDAgEAMBEGCisGAQQBnHgBAwUEAwIBADARBgorBgEE\nAZx4AQMGBAMCAQAwEQYKKwYBBAGceAEDBwQDAgEAMBEGCisGAQQBnHgBAwMEAwIB\nBjARBgorBgEEAZx4AQMIBAMCAV0wTQYJKwYBBAGceAEEBECeRKrvAs/Kb926ymac\nbP0p4auNl+vJOYVxKKy7E7h0DfMUNtNOhuX4rgzf6zoOGF20beysF2zHfXYcIqG5\n3PJbMEYGCSqGSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAICBQChHDAaBgkqhkiG9w0B\nAQgwDQYJYIZIAWUDBAICBQCiAwIBMKMDAgEBA4ICAQBXXzX8w+z06JNKLVAa9vyE\njC69c7uvfTPScqLzOCV+S8yZ7Ibpn6gdRcgn5s3F7uerVs9/8mq+rDpMzLTVxLei\nYAW9jDS9VdEgfUp3GzzL1g3zsWNZPpWuAu0Cw1V7KnQ9kiGsJMRKerx8QLrm+aAH\nOiob4XHl2naUx9aILzCLbNgLBdh6Tw2XkGj8NB9O7kNQoINEz6U+cAJL5LWzuoYt\nW1IJkYUEMydvLImFHeFIFtB2wI4mTSuCjtb/pBUeRdvDm5dmY/VPvh+CkvCeXNze\nHPZ8vcQ+ZZNS44O9rMnSUOtRFZb3ow3atXsx53Gy9rp41Bd0OZgSMrnHH74lDQX0\nkkNP+UrRYs66q0gJaSZglzkWfHLtAGfuRh9XyBh4kBgHcjF1Qh6frTpotX9t+0V/\nQZv3KjPVMsGaUN407WHEoAl6qX6TSS/An2EdXgqbhXS5O81gzatWDTcT2D3VJG1N\nHYtkh1J5WmrFTphc7OhxmVk7l3UkWPyS8Oi8be2y8Q4x0wgviZn5eOa/djpHoarW\nLS91KKPZXGyXlj49TlCjbl4RfyKYOd/HqgAYYdtqBe84AyJQRvuD5gWmdBzagncb\nyKjs6tYr74aAGnAqulp+yqvrzb7teUQmCMkROfzFjYZmLByqw6UGRdHgCf8hOzmO\nch4hf9cHRLAUJpqynRmb+g==\n-----END CERTIFICATE-----\n"
-	defaultCertChain := "-----BEGIN CERTIFICATE-----\n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\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIGYzCCBBKgAwIBAgIDAQAAMEYGCSqGSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAIC\nBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZIAWUDBAICBQCiAwIBMKMDAgEBMHsxFDAS\nBgNVBAsMC0VuZ2luZWVyaW5nMQswCQYDVQQGEwJVUzEUMBIGA1UEBwwLU2FudGEg\nQ2xhcmExCzAJBgNVBAgMAkNBMR8wHQYDVQQKDBZBZHZhbmNlZCBNaWNybyBEZXZp\nY2VzMRIwEAYDVQQDDAlBUkstTWlsYW4wHhcNMjAxMDIyMTcyMzA1WhcNNDUxMDIy\nMTcyMzA1WjB7MRQwEgYDVQQLDAtFbmdpbmVlcmluZzELMAkGA1UEBhMCVVMxFDAS\nBgNVBAcMC1NhbnRhIENsYXJhMQswCQYDVQQIDAJDQTEfMB0GA1UECgwWQWR2YW5j\nZWQgTWljcm8gRGV2aWNlczESMBAGA1UEAwwJQVJLLU1pbGFuMIICIjANBgkqhkiG\n9w0BAQEFAAOCAg8AMIICCgKCAgEA0Ld52RJOdeiJlqK2JdsVmD7FktuotWwX1fNg\nW41XY9Xz1HEhSUmhLz9Cu9DHRlvgJSNxbeYYsnJfvyjx1MfU0V5tkKiU1EesNFta\n1kTA0szNisdYc9isqk7mXT5+KfGRbfc4V/9zRIcE8jlHN61S1ju8X93+6dxDUrG2\nSzxqJ4BhqyYmUDruPXJSX4vUc01P7j98MpqOS95rORdGHeI52Naz5m2B+O+vjsC0\n60d37jY9LFeuOP4Meri8qgfi2S5kKqg/aF6aPtuAZQVR7u3KFYXP59XmJgtcog05\ngmI0T/OitLhuzVvpZcLph0odh/1IPXqx3+MnjD97A7fXpqGd/y8KxX7jksTEzAOg\nbKAeam3lm+3yKIcTYMlsRMXPcjNbIvmsBykD//xSniusuHBkgnlENEWx1UcbQQrs\n+gVDkuVPhsnzIRNgYvM48Y+7LGiJYnrmE8xcrexekBxrva2V9TJQqnN3Q53kt5vi\nQi3+gCfmkwC0F0tirIZbLkXPrPwzZ0M9eNxhIySb2npJfgnqz55I0u33wh4r0ZNQ\neTGfw03MBUtyuzGesGkcw+loqMaq1qR4tjGbPYxCvpCq7+OgpCCoMNit2uLo9M18\nfHz10lOMT8nWAUvRZFzteXCm+7PHdYPlmQwUw3LvenJ/ILXoQPHfbkH0CyPfhl1j\nWhJFZasCAwEAAaN+MHwwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBSFrBrRQ/fI\nrFXUxR1BSKvVeErUUzAPBgNVHRMBAf8EBTADAQH/MDoGA1UdHwQzMDEwL6AtoCuG\nKWh0dHBzOi8va2RzaW50Zi5hbWQuY29tL3ZjZWsvdjEvTWlsYW4vY3JsMEYGCSqG\nSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAICBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZI\nAWUDBAICBQCiAwIBMKMDAgEBA4ICAQC6m0kDp6zv4Ojfgy+zleehsx6ol0ocgVel\nETobpx+EuCsqVFRPK1jZ1sp/lyd9+0fQ0r66n7kagRk4Ca39g66WGTJMeJdqYriw\nSTjjDCKVPSesWXYPVAyDhmP5n2v+BYipZWhpvqpaiO+EGK5IBP+578QeW/sSokrK\ndHaLAxG2LhZxj9aF73fqC7OAJZ5aPonw4RE299FVarh1Tx2eT3wSgkDgutCTB1Yq\nzT5DuwvAe+co2CIVIzMDamYuSFjPN0BCgojl7V+bTou7dMsqIu/TW/rPCX9/EUcp\nKGKqPQ3P+N9r1hjEFY1plBg93t53OOo49GNI+V1zvXPLI6xIFVsh+mto2RtgEX/e\npmMKTNN6psW88qg7c1hTWtN6MbRuQ0vm+O+/2tKBF2h8THb94OvvHHoFDpbCELlq\nHnIYhxy0YKXGyaW1NjfULxrrmxVW4wcn5E8GddmvNa6yYm8scJagEi13mhGu4Jqh\n3QU3sf8iUSUr09xQDwHtOQUVIqx4maBZPBtSMf+qUDtjXSSq8lfWcd8bLr9mdsUn\nJZJ0+tuPMKmBnSH860llKk+VpVQsgqbzDIvOLvD6W1Umq25boxCYJ+TuBoa4s+HH\nCViAvgT9kf/rBq1d+ivj6skkHxuzcxbk1xv6ZGxrteJxVH7KlX7YRdZ6eARKwLe4\nAFZEAwoKCQ==\n-----END CERTIFICATE-----\n"
-	defaultIDKeyDigestOld, err := hex.DecodeString("57e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc1")
-	require.NoError(err)
-	defaultIDKeyDigest := idkeydigest.NewList([][]byte{defaultIDKeyDigestOld})
-
 	testCases := map[string]struct {
-		report             string
-		runtimeData        string
-		vcek               string
-		certChain          string
-		idkeydigests       idkeydigest.List
-		enforceIDKeyDigest idkeydigest.Enforcement
-		wantErr            bool
-		assertCorrectError func(error)
+		cfg    *config.AzureSEVSNP
+		logger attestation.Logger
 	}{
 		"success": {
-			report:             defaultReport,
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
+			cfg:    config.DefaultForAzureSEVSNP(),
+			logger: logger.NewTest(t),
+		},
+		"nil logger": {
+			cfg:    config.DefaultForAzureSEVSNP(),
+			logger: nil,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(_ *testing.T) {
+			validator := NewValidator(tc.cfg, tc.logger)
+			require.NotNil(validator)
+			require.NotNil(validator.log)
+		})
+	}
+}
+
+type stubHTTPSGetter struct {
+	urlResponseMatcher *urlResponseMatcher // maps responses to requested URLs
+	err                error
+}
+
+func newStubHTTPSGetter(urlResponseMatcher *urlResponseMatcher, err error) *stubHTTPSGetter {
+	return &stubHTTPSGetter{
+		urlResponseMatcher: urlResponseMatcher,
+		err:                err,
+	}
+}
+
+func (s *stubHTTPSGetter) Get(url string) ([]byte, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.urlResponseMatcher.match(url)
+}
+
+type urlResponseMatcher struct {
+	certChainResponse    []byte
+	wantCertChainRequest bool
+	vcekResponse         []byte
+	wantVcekRequest      bool
+}
+
+func (m *urlResponseMatcher) match(url string) ([]byte, error) {
+	switch {
+	case url == "https://kdsintf.amd.com/vcek/v1/Milan/cert_chain":
+		if !m.wantCertChainRequest {
+			return nil, fmt.Errorf("unexpected cert_chain request")
+		}
+		return m.certChainResponse, nil
+	case regexp.MustCompile(`https:\/\/kdsintf.amd.com\/vcek\/v1\/Milan\/.*`).MatchString(url):
+		if !m.wantVcekRequest {
+			return nil, fmt.Errorf("unexpected VCEK request")
+		}
+		return m.vcekResponse, nil
+	default:
+		return nil, fmt.Errorf("unexpected URL: %s", url)
+	}
+}
+
+// TestCheckIDKeyDigest tests validation of an IDKeyDigest under different enforcement policies.
+func TestCheckIDKeyDigest(t *testing.T) {
+	cfgWithAcceptedIDKeyDigests := func(enforcementPolicy idkeydigest.Enforcement, digestStrings []string) *config.AzureSEVSNP {
+		digests := idkeydigest.List{}
+		for _, digest := range digestStrings {
+			digests = append(digests, []byte(digest))
+		}
+		cfg := config.DefaultForAzureSEVSNP()
+		cfg.FirmwareSignerConfig.AcceptedKeyDigests = digests
+		cfg.FirmwareSignerConfig.EnforcementPolicy = enforcementPolicy
+		return cfg
+	}
+	reportWithIDKeyDigest := func(idKeyDigest string) *spb.Attestation {
+		report := &spb.Attestation{}
+		report.Report = &spb.Report{}
+		report.Report.IdKeyDigest = []byte(idKeyDigest)
+		return report
+	}
+	newTestValidator := func(cfg *config.AzureSEVSNP, validateTokenErr error) *Validator {
+		validator := NewValidator(cfg, logger.NewTest(t))
+		validator.maa = &stubMaaValidator{
+			validateTokenErr: validateTokenErr,
+		}
+		return validator
+	}
+
+	testCases := map[string]struct {
+		idKeyDigest          string
+		acceptedIDKeyDigests []string
+		enforcementPolicy    idkeydigest.Enforcement
+		validateMaaTokenErr  error
+		wantErr              bool
+	}{
+		"matching digest": {
+			idKeyDigest:          "test",
+			acceptedIDKeyDigests: []string{"test"},
+		},
+		"no accepted digests": {
+			idKeyDigest:          "test",
+			acceptedIDKeyDigests: []string{},
+			wantErr:              true,
+		},
+		"mismatching digest, enforce": {
+			idKeyDigest:          "test",
+			acceptedIDKeyDigests: []string{"other"},
+			wantErr:              true,
+		},
+		"mismatching digest, maaFallback": {
+			idKeyDigest:          "test",
+			acceptedIDKeyDigests: []string{"other"},
+			enforcementPolicy:    idkeydigest.MAAFallback,
+		},
+		"mismatching digest, maaFallback errors": {
+			idKeyDigest:          "test",
+			acceptedIDKeyDigests: []string{"other"},
+			enforcementPolicy:    idkeydigest.MAAFallback,
+			validateMaaTokenErr:  errors.New("maa fallback failed"),
+			wantErr:              true,
+		},
+		"mismatching digest, warnOnly": {
+			idKeyDigest:          "test",
+			acceptedIDKeyDigests: []string{"other"},
+			enforcementPolicy:    idkeydigest.WarnOnly,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			require := require.New(t)
+
+			cfg := cfgWithAcceptedIDKeyDigests(tc.enforcementPolicy, tc.acceptedIDKeyDigests)
+			report := reportWithIDKeyDigest(tc.idKeyDigest)
+			validator := newTestValidator(cfg, tc.validateMaaTokenErr)
+
+			err := validator.checkIDKeyDigest(context.Background(), report, "", nil)
+			if tc.wantErr {
+				require.Error(err)
+			} else {
+				require.NoError(err)
+			}
+		})
+	}
+}
+
+type stubMaaValidator struct {
+	validateTokenErr error
+}
+
+func (v *stubMaaValidator) validateToken(_ context.Context, _ string, _ string, _ []byte) error {
+	return v.validateTokenErr
+}
+
+// TestGetTrustedKey tests the verification and validation of attestation report.
+func TestTrustedKeyFromSNP(t *testing.T) {
+	cgo := os.Getenv("CGO_ENABLED")
+	if cgo == "0" {
+		t.Skip("skipping test because CGO is disabled and tpm simulator requires it")
+	}
+
+	tpm, err := simulator.OpenSimulatedTPM()
+	require.NoError(t, err)
+	defer tpm.Close()
+	key, err := client.AttestationKeyRSA(tpm)
+	require.NoError(t, err)
+	defer key.Close()
+	akPub, err := key.PublicArea().Encode()
+	require.NoError(t, err)
+
+	defaultCfg := config.DefaultForAzureSEVSNP()
+	defaultReport := hex.EncodeToString(testdata.AttestationReport)
+	defaultRuntimeData := hex.EncodeToString(testdata.RuntimeData)
+	defaultIDKeyDigestOld, err := hex.DecodeString("57e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc1")
+	require.NoError(t, err)
+	defaultIDKeyDigest := idkeydigest.NewList([][]byte{defaultIDKeyDigestOld})
+	defaultVerifier := &stubAttestationVerifier{}
+	skipVerifier := &stubAttestationVerifier{skipCheck: true}
+	defaultValidator := &stubAttestationValidator{}
+
+	// reportTransformer unpacks the hex-encoded report, applies the given transformations and re-encodes it.
+	reportTransformer := func(reportHex string, transformations func(*spb.Report)) string {
+		rawReport, err := hex.DecodeString(reportHex)
+		require.NoError(t, err)
+		report, err := abi.ReportToProto(rawReport)
+		require.NoError(t, err)
+		transformations(report)
+		reportBytes, err := abi.ReportToAbiBytes(report)
+		require.NoError(t, err)
+		return hex.EncodeToString(reportBytes)
+	}
+
+	testCases := map[string]struct {
+		report               string
+		runtimeData          string
+		vcek                 []byte
+		certChain            []byte
+		acceptedIDKeyDigests idkeydigest.List
+		enforcementPolicy    idkeydigest.Enforcement
+		getter               *stubHTTPSGetter
+		verifier             *stubAttestationVerifier
+		validator            *stubAttestationValidator
+		wantErr              bool
+		assertion            func(*assert.Assertions, error)
+	}{
+		"success": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+		},
+		"certificate fetch error": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			getter: newStubHTTPSGetter(
+				nil,
+				assert.AnError,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "retrieving VCEK certificate from AMD KDS")
+			},
+		},
+		"fetch vcek and certchain": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{
+					vcekResponse:         testdata.AmdKdsVCEK,
+					wantVcekRequest:      true,
+					certChainResponse:    testdata.CertChain,
+					wantCertChainRequest: true,
+				},
+				nil,
+			),
+		},
+		"fetch vcek": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{
+					vcekResponse:    testdata.AmdKdsVCEK,
+					wantVcekRequest: true,
+				},
+				nil,
+			),
+		},
+		"fetch certchain": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{
+					certChainResponse:    testdata.CertChain,
+					wantCertChainRequest: true,
+				},
+				nil,
+			),
 		},
 		"invalid report signature": {
-			report:             "02000000020000001f0003000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065d010000000000000000000000000000000ccc0895ef2f2c3b8c8568f5a2bb65ff5bf9387a09359742ad41e686cacfd38b00000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f7240b24a1babe2ece844c4f792bcd9844bf6907d14aeea00156310b9538daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d0000000000000000000000000000000000000000000000009e44aaef02cfca6fddbaca669c6cfd29e1ab8d97ebc939857128acbb13b8740df31436d34e86e5f8ae0cdfeb3a0e185db46decac176cc77d761c22a1b9dcf25b020000000000065d0133010001330100020000000000065d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ccb7dc15abff884802e774b39adba8e6ff7efcf05e115c91588e657065151056a320f70c788d0e3619391052922e422b000000000000000000000000000000000000000000000000e8dbf581140443bbc681c50eca8639a76ef6cab34e0780cbca977e2e2a03f8b864fd4e9774b0f8055511567e031e59bf00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c02000001000000020000000100000048020000",
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := &signatureError{}
-				assert.ErrorAs(t, err, &target)
+			report: reportTransformer(defaultReport, func(r *spb.Report) {
+				r.Signature = make([]byte, 512)
+			}),
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "report signature verification error")
 			},
 		},
 		"invalid vcek": {
-			report:             defaultReport,
-			runtimeData:        defaultRuntimeData,
-			vcek:               "-----BEGIN CERTIFICATE-----\nMIIFTDCCAvugAwIBAgIBADBGBgkqhkiG9w0BAQowOaAPMA0GCWCGSAFlAwQCAgUA\noRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAgUAogMCATCjAwIBATB7MRQwEgYD\nVQQLDAtFbmdpbmVlcmluZzELMAkGA1UEBhMCVVMxFDASBgNVBAcMC1NhbnRhIENs\nYXJhMQswCQYDVQQIDAJDQTEfMB0GA1UECgwWQWR2YW5jZWQgTWljcm8gRGV2aWNl\nczESMBAGA1UEAwwJU0VWLU1pbGFuMB4XDTIyMDYxMTE2MjE0OFoXDTI5MDYxMTE2\nMjE0OFowejEUMBIGA1UECwwLRW5naW5lZXJpbmcxCzAJBgNVBAYTAlVTMRQwEgYD\nVQQHDAtTYW50YSBDbGFyYTELMAkGA1UECAwCQ0ExHzAdBgNVBAoMFkFkdmFuY2Vk\nIE1pY3JvIERldmljZXMxETAPBgNVBAMMCFNFVi1WQ0VLMHYwEAYHKoZIzj0CAQYF\nK4EEACIDYgAEdBdzuRwdnQvH5MMutYl0GqQc6kwh0NRueQhDm00i5XLCgV0NLvlX\nrhKuomRLKFdyT9ddzcgZGYlB5lpc1MPZvOOKWAxsniZ1fB3EcMcbS5blPM3yl1Ca\nGzwBMEq/P7dfo4IBFjCCARIwEAYJKwYBBAGceAEBBAMCAQAwFwYJKwYBBAGceAEC\nBAoWCE1pbGFuLUIwMBEGCisGAQQBnHgBAwEEAwIBAjARBgorBgEEAZx4AQMCBAMC\nAQAwEQYKKwYBBAGceAEDBAQDAgEAMBEGCisGAQQBnHgBAwUEAwIBADARBgorBgEE\nAZx4AQMGBAMCAQAwEQYKKwYBBAGceAEDBwQDAgEAMBEGCisGAQQBnHgBAwMEAwIB\nBjARBgorBgEEAZx4AQMIBAMCAV0wTQYJKwYBBAGceAEEBEDTy4KCFroFQ6PWI7+Q\nTHqQj0c5tch4VsqwbhdisV/kXizUuNiEBniVILiO2mLY3zZYMYHKEDm3NbhCaVO+\nQOgSMEYGCSqGSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAICBQChHDAaBgkqhkiG9w0B\nAQgwDQYJYIZIAWUDBAICBQCiAwIBMKMDAgEBA4ICAQBkge6Vsbnni2DTPrXw4To9\nSR6vwsgRKiUxyu/tB18DiDcjO/HpFa1l8COt6Gg690Hnn4ezYAIYw4co/SoJQ0+v\nerxiQqJJAHgpKQ3QqNdnESlyM9eZaZN5ND4S+gXtnFb4K42FzAAy6cyuXKVsrh8B\nuMJnK0sHm3+8qDUXz/NjL95kG/wGSB6LOSk0sll2VFKaolMmH+VhR4m6zO7z8/SA\nt/cPXsZ+/Me/ZP46WibHGHhvLD8kSuyVmt+SIlx9wjdRHqNBNtvx4VEMMZwJX2o+\n0T6nuZ4cnrHK18zdb+K8/3qCFprdHRDD5bo491fnIsAYGGIfcNmAz2uCI9j9TE6R\nGGS2k1jQgWls19nw/Ra++8Kf/roR6WVax8k2R8+XV9eRZ33TqDXAHSbGcZbynaEb\neo6V8MKwLbVNi/7MP6b90nEtvN0SLRbKCJvEn/iHUHQa9BnT14zeTJw2gR/uG+M5\nxC+q9+nKMhIAGOIyxpFp67XBJSSOJut9bmvaPpLIC+/Mr+GKiM+YMQHzYwH6fuDT\no8LVlmuDiOz78BzmD/zy3DaYWTkHourKa7x/DSwuF8MQkvquwEHwkuikpLyo+b54\nSzqt81FR21rUxbkaUv9urRyYfzZ3m3ogApAveGdYPo1y4sl1FPd8X5+aVeghGyXU\nL9lHQ8+Y53Pf/ZQ/gYI0dQ==\n-----END CERTIFICATE-----\n",
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := &vcekError{}
-				assert.ErrorAs(t, err, &target)
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 []byte("invalid"),
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{
+					vcekResponse:    []byte("invalid"),
+					wantVcekRequest: true,
+				},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "could not interpret VCEK DER bytes: x509: malformed certificate")
 			},
 		},
-		"malformed ask": {
-			report:             defaultReport,
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          "-----BEGIN CERTIFICATE-----\n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\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIGYzCCBBKgAwIBAgIDAQAAMEYGCSqGSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAIC\nBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZIAWUDBAICBQCiAwIBMKMDAgEBMHsxFDAS\nBgNVBAsMC0VuZ2luZWVyaW5nMQswCQYDVQQGEwJVUzEUMBIGA1UEBwwLU2FudGEg\nQ2xhcmExCzAJBgNVBAgMAkNBMR8wHQYDVQQKDBZBZHZhbmNlZCBNaWNybyBEZXZp\nY2VzMRIwEAYDVQQDDAlBUkstTWlsYW4wHhcNMjAxMDIyMTcyMzA1WhcNNDUxMDIy\nMTcyMzA1WjB7MRQwEgYDVQQLDAtFbmdpbmVlcmluZzELMAkGA1UEBhMCVVMxFDAS\nBgNVBAcMC1NhbnRhIENsYXJhMQswCQYDVQQIDAJDQTEfMB0GA1UECgwWQWR2YW5j\nZWQgTWljcm8gRGV2aWNlczESMBAGA1UEAwwJQVJLLU1pbGFuMIICIjANBgkqhkiG\n9w0BAQEFAAOCAg8AMIICCgKCAgEA0Ld52RJOdeiJlqK2JdsVmD7FktuotWwX1fNg\nW41XY9Xz1HEhSUmhLz9Cu9DHRlvgJSNxbeYYsnJfvyjx1MfU0V5tkKiU1EesNFta\n1kTA0szNisdYc9isqk7mXT5+KfGRbfc4V/9zRIcE8jlHN61S1ju8X93+6dxDUrG2\nSzxqJ4BhqyYmUDruPXJSX4vUc01P7j98MpqOS95rORdGHeI52Naz5m2B+O+vjsC0\n60d37jY9LFeuOP4Meri8qgfi2S5kKqg/aF6aPtuAZQVR7u3KFYXP59XmJgtcog05\ngmI0T/OitLhuzVvpZcLph0odh/1IPXqx3+MnjD97A7fXpqGd/y8KxX7jksTEzAOg\nbKAeam3lm+3yKIcTYMlsRMXPcjNbIvmsBykD//xSniusuHBkgnlENEWx1UcbQQrs\n+gVDkuVPhsnzIRNgYvM48Y+7LGiJYnrmE8xcrexekBxrva2V9TJQqnN3Q53kt5vi\nQi3+gCfmkwC0F0tirIZbLkXPrPwzZ0M9eNxhIySb2npJfgnqz55I0u33wh4r0ZNQ\neTGfw03MBUtyuzGesGkcw+loqMaq1qR4tjGbPYxCvpCq7+OgpCCoMNit2uLo9M18\nfHz10lOMT8nWAUvRZFzteXCm+7PHdYPlmQwUw3LvenJ/ILXoQPHfbkH0CyPfhl1j\nWhJFZasCAwEAAaN+MHwwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBSFrBrRQ/fI\nrFXUxR1BSKvVeErUUzAPBgNVHRMBAf8EBTADAQH/MDoGA1UdHwQzMDEwL6AtoCuG\nKWh0dHBzOi8va2RzaW50Zi5hbWQuY29tL3ZjZWsvdjEvTWlsYW4vY3JsMEYGCSqG\nSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAICBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZI\nAWUDBAICBQCiAwIBMKMDAgEBA4ICAQC6m0kDp6zv4Ojfgy+zleehsx6ol0ocgVel\nETobpx+EuCsqVFRPK1jZ1sp/lyd9+0fQ0r66n7kagRk4Ca39g66WGTJMeJdqYriw\nSTjjDCKVPSesWXYPVAyDhmP5n2v+BYipZWhpvqpaiO+EGK5IBP+578QeW/sSokrK\ndHaLAxG2LhZxj9aF73fqC7OAJZ5aPonw4RE299FVarh1Tx2eT3wSgkDgutCTB1Yq\nzT5DuwvAe+co2CIVIzMDamYuSFjPN0BCgojl7V+bTou7dMsqIu/TW/rPCX9/EUcp\nKGKqPQ3P+N9r1hjEFY1plBg93t53OOo49GNI+V1zvXPLI6xIFVsh+mto2RtgEX/e\npmMKTNN6psW88qg7c1hTWtN6MbRuQ0vm+O+/2tKBF2h8THb94OvvHHoFDpbCELlq\nHnIYhxy0YKXGyaW1NjfULxrrmxVW4wcn5E8GddmvNa6yYm8scJagEi13mhGu4Jqh\n3QU3sf8iUSUr09xQDwHtOQUVIqx4maBZPBtSMf+qUDtjXSSq8lfWcd8bLr9mdsUn\nJZJ0+tuPMKmBnSH860llKk+VpVQsgqbzDIvOLvD6W1Umq25boxCYJ+TuBoa4s+HH\nCViAvgT9kf/rBq1d+ivj6skkHxuzcxbk1xv6ZGxrteJxVH7KlX7YRdZ6eARKwLe4\nAFZEAwoKCQ==\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\n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\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIGYzCCBBKgAwIBAgIDAQAAMEYGCSqGSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAIC\nBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZIAWUDBAICBQCiAwIBMKMDAgEBMHsxFDAS\nBgNVBAsMC0VuZ2luZWVyaW5nMQswCQYDVQQGEwJVUzEUMBIGA1UEBwwLU2FudGEg\nQ2xhcmExCzAJBgNVBAgMAkNBMR8wHQYDVQQKDBZBZHZhbmNlZCBNaWNybyBEZXZp\nY2VzMRIwEAYDVQQDDAlBUkstTWlsYW4wHhcNMjAxMDIyMTcyMzA1WhcNNDUxMDIy\nMTcyMzA1WjB7MRQwEgYDVQQLDAtFbmdpbmVlcmluZzELMAkGA1UEBhMCVVMxFDAS\nBgNVBAcMC1NhbnRhIENsYXJhMQswCQYDVQQIDAJDQTEfMB0GA1UECgwWQWR2YW5j\nZWQgTWljcm8gRGV2aWNlczESMBAGA1UEAwwJQVJLLU1pbGFuMIICIjANBgkqhkiG\n9w0BAQEFAAOCAg8AMIICCgKCAgEA0Ld52RJOdeiJlqK2JdsVmD7FktuotWwX1fNg\nW41XY9Xz1HEhSUmhLz9Cu9DHRlvgJSNxbeYYsnJfvyjx1MfU0V5tkKiU1EesNFta\n1kTA0szNisdYc9isqk7mXT5+KfGRbfc4V/9zRIcE8jlHN61S1ju8X93+6dxDUrG2\nSzxqJ4BhqyYmUDruPXJSX4vUc01P7j98MpqOS95rORdGHeI52Naz5m2B+O+vjsC0\n60d37jY9LFeuOP4Meri8qgfi2S5kKqg/aF6aPtuAZQVR7u3KFYXP59XmJgtcog05\ngmI0T/OitLhuzVvpZcLph0odh/1IPXqx3+MnjD97A7fXpqGd/y8KxX7jksTEzAOg\nbKAeam3lm+3yKIcTYMlsRMXPcjNbIvmsBykD//xSniusuHBkgnlENEWx1UcbQQrs\n+gVDkuVPhsnzIRNgYvM48Y+7LGiJYnrmE8xcrexekBxrva2V9TJQqnN3Q53kt5vi\nQi3+gCfmkwC0F0tirIZbLkXPrPwzZ0M9eNxhIySb2npJfgnqz55I0u33wh4r0ZNQ\neTGfw03MBUtyuzGesGkcw+loqMaq1qR4tjGbPYxCvpCq7+OgpCCoMNit2uLo9M18\nfHz10lOMT8nWAUvRZFzteXCm+7PHdYPlmQwUw3LvenJ/ILXoQPHfbkH0CyPfhl1j\nWhJFZasCAwEAAaN+MHwwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBSFrBrRQ/fI\nrFXUxR1BSKvVeErUUzAPBgNVHRMBAf8EBTADAQH/MDoGA1UdHwQzMDEwL6AtoCuG\nKWh0dHBzOi8va2RzaW50Zi5hbWQuY29tL3ZjZWsvdjEvTWlsYW4vY3JsMEYGCSqG\nSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAICBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZI\nAWUDBAICBQCiAwIBMKMDAgEBA4ICAQC6m0kDp6zv4Ojfgy+zleehsx6ol0ocgVel\nETobpx+EuCsqVFRPK1jZ1sp/lyd9+0fQ0r66n7kagRk4Ca39g66WGTJMeJdqYriw\nSTjjDCKVPSesWXYPVAyDhmP5n2v+BYipZWhpvqpaiO+EGK5IBP+578QeW/sSokrK\ndHaLAxG2LhZxj9aF73fqC7OAJZ5aPonw4RE299FVarh1Tx2eT3wSgkDgutCTB1Yq\nzT5DuwvAe+co2CIVIzMDamYuSFjPN0BCgojl7V+bTou7dMsqIu/TW/rPCX9/EUcp\nKGKqPQ3P+N9r1hjEFY1plBg93t53OOo49GNI+V1zvXPLI6xIFVsh+mto2RtgEX/e\npmMKTNN6psW88qg7c1hTWtN6MbRuQ0vm+O+/2tKBF2h8THb94OvvHHoFDpbCELlq\nHnIYhxy0YKXGyaW1NjfULxrrmxVW4wcn5E8GddmvNa6yYm8scJagEi13mhGu4Jqh\n3QU3sf8iUSUr09xQDwHtOQUVIqx4maBZPBtSMf+qUDtjXSSq8lfWcd8bLr9mdsUn\nJZJ0+tuPMKmBnSH860llKk+VpVQsgqbzDIvOLvD6W1Umq25boxCYJ+TuBoa4s+HH\nCViAvgT9kf/rBq1d+ivj6skkHxuzcxbk1xv6ZGxrteJxVH7KlX7YRdZ6eARKwLe4\nAFZEAwoKCQ==\n-----END CERTIFICATE-----\n",
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := &askError{}
-				assert.ErrorAs(t, err, &target)
+		"invalid certchain fall back to embedded": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            []byte("invalid"),
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{
+					certChainResponse:    []byte("invalid"),
+					wantCertChainRequest: true,
+				},
+				nil,
+			),
+			wantErr: true,
+		},
+		"invalid runtime data": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData[:len(defaultRuntimeData)-10],
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "validating HCLAkPub: unmarshalling json: unexpected end of JSON input")
 			},
 		},
-		"invalid runtime data digest": {
-			report:             defaultReport,
-			runtimeData:        "7b226b657973223a5b7b226b6964223a2248434c426b507562222c226b65795f6f7073223a5b22656e6372797074225d2c226b7479223a22525341222c2265223a2241514142222c226e223a22747946717641414166324746656c6b5737566352684a6e4132597659364c6a427a65554e3276614d5a6e5a74685f74466e574d6b4b35415874757379434e656c337569703356475a7a54617a3558327447566a4772732d4d56486361703951647771555856573367394f515f74456269786378372d78626c554a516b474551666e626253646e5049326c764c7a4f73315a5f30766a65444178765351726d616773366e592d634a4157482d706744564a79487470735553735f5142576b6c617a44736f3557486d6e4d743973394d75696c57586f7830525379586e55656151796859316a753752545363526e5658754e7936377a5f454a6e774d393264727746623841556430534a5f396f687645596c34615a52444543476f3056726a635348552d4a474a6575574335566844425235454f6f4356424267716539653833765f6c4a784933574c65326f7653495a49497a416d625351227d5d2c22766d2d636f6e66696775726174696f6e223a7b22636f6e736f6c652d656e61626c6564223a747275652c2263757272656e742d74696d65223a313636313435353339312c227365637572652d626f6f74223a66616c73652c2274706d2d656e61626c6564223a747275652c22766d556e697175654964223a2242364339384333422d344543372d344441362d424432462d374439384432304437423735227d7d",
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := errors.New("unexpected runtimeData digest in TPM")
-				assert.ErrorAs(t, err, &target)
+		"inacceptable idkeydigest (wrong size), enforce": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: idkeydigest.List{[]byte{0x00}},
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "bad hash size in TrustedIDKeyHashes")
 			},
 		},
-		"invalid idkeydigest": {
-			report:             defaultReport,
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       idkeydigest.List{[]byte{0x00}},
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := &idKeyError{}
-				assert.ErrorAs(t, err, &target)
+		"inacceptable idkeydigest (wrong value), enforce": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: idkeydigest.List{make([]byte, 48)},
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "report ID key not trusted")
 			},
 		},
-		"don't enforce idkeydigest": {
-			report:             defaultReport,
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       idkeydigest.List{[]byte{0x00}},
-			enforceIDKeyDigest: idkeydigest.WarnOnly,
+		"inacceptable idkeydigest, warn only": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: idkeydigest.List{[]byte{0x00}},
+			enforcementPolicy:    idkeydigest.WarnOnly,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
 		},
-		"unsupported microcode version": {
-			report:             "02000000020000001f0003000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065d010000000000000000000000000000000ccc0895ef2f2c3b8c8568f5a2bb65ff5bf9387a09359742ad41e686cacfd38b00000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f7240b24a1babe2ece844c4f792bcd9844bf6907d14aeea00156310b9538daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d0000000000000000000000000000000000000000000000009e44aaef02cfca6fddbaca669c6cfd29e1ab8d97ebc939857128acbb13b8740df31436d34e86e5f8ae0cdfeb3a0e185db46decac176cc77d761c22a1b9dcf25b020000000000065c0133010001330100020000000000065d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bcb7dc15abff884802e774b39adba8e6ff7efcf05e115c91588e657065151056a320f70c788d0e3619391052922e422b000000000000000000000000000000000000000000000000e8dbf581140443bbc681c50eca8639a76ef6cab34e0780cbca977e2e2a03f8b864fd4e9774b0f8055511567e031e59bf00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c02000001000000020000000100000048020000",
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := &versionError{}
-				assert.ErrorAs(t, err, &target)
+		"launch tcb < minimum launch tcb": {
+			report: reportTransformer(defaultReport, func(r *spb.Report) {
+				launchTcb := kds.DecomposeTCBVersion(kds.TCBVersion(r.LaunchTcb))
+				defaultCfg.MicrocodeVersion.Value = 10
+				launchTcb.UcodeSpl = 9
+				newLaunchTcb, err := kds.ComposeTCBParts(launchTcb)
+				require.NoError(t, err)
+				r.LaunchTcb = uint64(newLaunchTcb)
+			}),
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.WarnOnly,
+			verifier:             skipVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "is lower than the policy minimum launch TCB")
 			},
 		},
-		"current tcb older than committed tcb": {
-			report:             "02000000020000001f0003000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065c010000000000000000000000000000000ccc0895ef2f2c3b8c8568f5a2bb65ff5bf9387a09359742ad41e686cacfd38b00000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f7240b24a1babe2ece844c4f792bcd9844bf6907d14aeea00156310b9538daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d0000000000000000000000000000000000000000000000009e44aaef02cfca6fddbaca669c6cfd29e1ab8d97ebc939857128acbb13b8740df31436d34e86e5f8ae0cdfeb3a0e185db46decac176cc77d761c22a1b9dcf25b020000000000065d0133010001330100020000000000065d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bcb7dc15abff884802e774b39adba8e6ff7efcf05e115c91588e657065151056a320f70c788d0e3619391052922e422b000000000000000000000000000000000000000000000000e8dbf581140443bbc681c50eca8639a76ef6cab34e0780cbca977e2e2a03f8b864fd4e9774b0f8055511567e031e59bf00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c02000001000000020000000100000048020000",
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := &versionError{}
-				assert.ErrorAs(t, err, &target)
+		"reported tcb < minimum tcb": {
+			report: reportTransformer(defaultReport, func(r *spb.Report) {
+				reportedTcb := kds.DecomposeTCBVersion(kds.TCBVersion(r.ReportedTcb))
+				reportedTcb.UcodeSpl = defaultCfg.MicrocodeVersion.Value - 1
+				newReportedTcb, err := kds.ComposeTCBParts(reportedTcb)
+				require.NoError(t, err)
+				r.ReportedTcb = uint64(newReportedTcb)
+			}),
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.WarnOnly,
+			verifier:             skipVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "is lower than the policy minimum TCB")
 			},
 		},
-		"launch tcb != committed tcb": {
-			report:             "02000000020000001f0003000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065d010000000000000000000000000000000ccc0895ef2f2c3b8c8568f5a2bb65ff5bf9387a09359742ad41e686cacfd38b00000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f7240b24a1babe2ece844c4f792bcd9844bf6907d14aeea00156310b9538daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d0000000000000000000000000000000000000000000000009e44aaef02cfca6fddbaca669c6cfd29e1ab8d97ebc939857128acbb13b8740df31436d34e86e5f8ae0cdfeb3a0e185db46decac176cc77d761c22a1b9dcf25b020000000000065d0133010001330100020000000000065c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bcb7dc15abff884802e774b39adba8e6ff7efcf05e115c91588e657065151056a320f70c788d0e3619391052922e422b000000000000000000000000000000000000000000000000e8dbf581140443bbc681c50eca8639a76ef6cab34e0780cbca977e2e2a03f8b864fd4e9774b0f8055511567e031e59bf00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c02000001000000020000000100000048020000",
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				target := &versionError{}
-				assert.ErrorAs(t, err, &target)
+		"current tcb < committed tcb": {
+			report: reportTransformer(defaultReport, func(r *spb.Report) {
+				r.CurrentTcb = r.CommittedTcb - 1
+			}),
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.WarnOnly,
+			verifier:             skipVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "is lower than the report's COMMITTED_TCB")
 			},
 		},
-		"debugging allowed": {
-			report:             "02000000020000001f000b000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065d010000000000000000000000000000000ccc0895ef2f2c3b8c8568f5a2bb65ff5bf9387a09359742ad41e686cacfd38b00000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f7240b24a1babe2ece844c4f792bcd9844bf6907d14aeea00156310b9538daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d0000000000000000000000000000000000000000000000009e44aaef02cfca6fddbaca669c6cfd29e1ab8d97ebc939857128acbb13b8740df31436d34e86e5f8ae0cdfeb3a0e185db46decac176cc77d761c22a1b9dcf25b020000000000065d0133010001330100020000000000065d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bcb7dc15abff884802e774b39adba8e6ff7efcf05e115c91588e657065151056a320f70c788d0e3619391052922e422b000000000000000000000000000000000000000000000000e8dbf581140443bbc681c50eca8639a76ef6cab34e0780cbca977e2e2a03f8b864fd4e9774b0f8055511567e031e59bf00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c02000001000000020000000100000048020000",
-			runtimeData:        defaultRuntimeData,
-			vcek:               defaultVCEK,
-			certChain:          defaultCertChain,
-			idkeydigests:       defaultIDKeyDigest,
-			enforceIDKeyDigest: idkeydigest.Equal,
-			wantErr:            true,
-			assertCorrectError: func(err error) {
-				assert.ErrorIs(t, err, errDebugEnabled)
+		"current tcb < tcb in vcek": {
+			report: reportTransformer(defaultReport, func(r *spb.Report) {
+				currentTcb := kds.DecomposeTCBVersion(kds.TCBVersion(r.CurrentTcb))
+				currentTcb.UcodeSpl = 0x5c // testdata.AzureThimVCEK has ucode version 0x5d
+				newCurrentTcb, err := kds.ComposeTCBParts(currentTcb)
+				require.NoError(t, err)
+				r.CurrentTcb = uint64(newCurrentTcb)
+			}),
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.WarnOnly,
+			verifier:             skipVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "is lower than the TCB of the V[CL]EK certificate")
+			},
+		},
+		"reported tcb != tcb in vcek": {
+			report: reportTransformer(defaultReport, func(r *spb.Report) {
+				r.ReportedTcb = uint64(0)
+			}),
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.WarnOnly,
+			verifier:             skipVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "does not match the TCB of the V[CL]EK certificate")
+			},
+		},
+		"vmpl != 0": {
+			report: reportTransformer(defaultReport, func(r *spb.Report) {
+				r.Vmpl = 1
+			}),
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             skipVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain:            testdata.CertChain,
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "report VMPL 1 is not 0")
+			},
+		},
+		"invalid ASK": {
+			report:               defaultReport,
+			runtimeData:          defaultRuntimeData,
+			acceptedIDKeyDigests: defaultIDKeyDigest,
+			enforcementPolicy:    idkeydigest.Equal,
+			verifier:             defaultVerifier,
+			validator:            defaultValidator,
+			vcek:                 testdata.AzureThimVCEK,
+			certChain: func() []byte {
+				c := make([]byte, len(testdata.CertChain))
+				copy(c, testdata.CertChain)
+				c[1676] = 0x41 // somewhere in the ASK signature
+				return c
+			}(),
+			getter: newStubHTTPSGetter(
+				&urlResponseMatcher{},
+				nil,
+			),
+			wantErr: true,
+			assertion: func(assert *assert.Assertions, err error) {
+				assert.ErrorContains(err, "crypto/rsa: verification error")
 			},
 		},
 	}
@@ -197,14 +618,16 @@ func TestTrustedKeyFromSNP(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			assert := assert.New(t)
+			require := require.New(t)
 
-			instanceInfo, err := newStubAzureInstanceInfo(tc.vcek, tc.certChain, tc.report, tc.runtimeData)
-			assert.NoError(err)
+			// This is important. Without this call, the trust module caches certificates across testcases.
+			defer trust.ClearProductCertCache()
+
+			instanceInfo, err := newStubInstanceInfo(tc.vcek, tc.certChain, tc.report, tc.runtimeData)
+			require.NoError(err)
 
 			statement, err := json.Marshal(instanceInfo)
-			if err != nil {
-				assert.Error(err)
-			}
+			require.NoError(err)
 
 			attDoc := vtpm.AttestationDocument{
 				InstanceInfo: statement,
@@ -213,21 +636,26 @@ func TestTrustedKeyFromSNP(t *testing.T) {
 				},
 			}
 
-			cfg := config.DefaultForAzureSEVSNP()
-			cfg.FirmwareSignerConfig = config.SNPFirmwareSignerConfig{
-				AcceptedKeyDigests: tc.idkeydigests,
-				EnforcementPolicy:  tc.enforceIDKeyDigest,
+			defaultCfg.FirmwareSignerConfig = config.SNPFirmwareSignerConfig{
+				AcceptedKeyDigests: tc.acceptedIDKeyDigests,
+				EnforcementPolicy:  tc.enforcementPolicy,
 			}
 
 			validator := &Validator{
-				hclValidator: &instanceInfo,
-				config:       cfg,
-				log:          logger.NewTest(t),
+				hclValidator:         &stubAttestationKey{},
+				config:               defaultCfg,
+				log:                  logger.NewTest(t),
+				getter:               tc.getter,
+				attestationVerifier:  tc.verifier,
+				attestationValidator: tc.validator,
 			}
 
 			key, err := validator.getTrustedKey(context.Background(), attDoc, nil)
 			if tc.wantErr {
-				tc.assertCorrectError(err)
+				assert.Error(err)
+				if tc.assertion != nil {
+					tc.assertion(assert, err)
+				}
 			} else {
 				assert.NoError(err)
 				assert.NotNil(key)
@@ -236,169 +664,66 @@ func TestTrustedKeyFromSNP(t *testing.T) {
 	}
 }
 
-func TestValidateAk(t *testing.T) {
-	require := require.New(t)
-
-	tpm, err := simulator.OpenSimulatedTPM()
-	require.NoError(err)
-	defer tpm.Close()
-	key, err := client.AttestationKeyRSA(tpm)
-	require.NoError(err)
-	defer key.Close()
-
-	e := base64.RawURLEncoding.EncodeToString(int32ToByte(key.PublicArea().RSAParameters.ExponentRaw))
-	n := base64.RawURLEncoding.EncodeToString(key.PublicArea().RSAParameters.ModulusRaw)
-
-	ak := akPub{E: e, N: n}
-	runtimeData := runtimeData{Keys: []akPub{ak}}
-
-	defaultRuntimeDataRaw, err := json.Marshal(runtimeData)
-	require.NoError(err)
-	defaultInstanceInfo := azureInstanceInfo{RuntimeData: defaultRuntimeDataRaw}
-
-	sig := sha256.Sum256(defaultRuntimeDataRaw)
-	defaultReportData := sig[:]
-	defaultRsaParams := key.PublicArea().RSAParameters
-
-	testCases := map[string]struct {
-		instanceInfo   azureInstanceInfo
-		runtimeDataRaw []byte
-		reportData     []byte
-		rsaParameters  *tpm2.RSAParams
-		wantErr        bool
-	}{
-		"success": {
-			instanceInfo:   defaultInstanceInfo,
-			runtimeDataRaw: defaultRuntimeDataRaw,
-			reportData:     defaultReportData,
-			rsaParameters:  defaultRsaParams,
-		},
-		"invalid json": {
-			instanceInfo:   defaultInstanceInfo,
-			runtimeDataRaw: []byte(""),
-			reportData:     defaultReportData,
-			rsaParameters:  defaultRsaParams,
-			wantErr:        true,
-		},
-		"invalid hash": {
-			instanceInfo:   defaultInstanceInfo,
-			runtimeDataRaw: defaultRuntimeDataRaw,
-			reportData:     bytes.Repeat([]byte{0}, 64),
-			rsaParameters:  defaultRsaParams,
-			wantErr:        true,
-		},
-		"invalid E": {
-			instanceInfo:   defaultInstanceInfo,
-			runtimeDataRaw: defaultRuntimeDataRaw,
-			reportData:     defaultReportData,
-			rsaParameters: func() *tpm2.RSAParams {
-				tmp := *defaultRsaParams
-				tmp.ExponentRaw = 1
-				return &tmp
-			}(),
-			wantErr: true,
-		},
-		"invalid N": {
-			instanceInfo:   defaultInstanceInfo,
-			runtimeDataRaw: defaultRuntimeDataRaw,
-			reportData:     defaultReportData,
-			rsaParameters: func() *tpm2.RSAParams {
-				tmp := *defaultRsaParams
-				tmp.ModulusRaw = []byte{0, 1, 2, 3}
-				return &tmp
-			}(),
-			wantErr: true,
-		},
-	}
-
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) {
-			assert := assert.New(t)
-			err = tc.instanceInfo.validateAk(tc.runtimeDataRaw, tc.reportData, tc.rsaParameters)
-			if tc.wantErr {
-				assert.Error(err)
-			} else {
-				assert.NoError(err)
-			}
-		})
-	}
+type stubAttestationVerifier struct {
+	skipCheck bool // whether the verification function should be called
 }
 
-func int32ToByte(val uint32) []byte {
-	r := make([]byte, 4)
-	binary.PutUvarint(r, uint64(val))
-	return r
+// SNPAttestation verifies the VCEK certificate as well as the certificate chain of the attestation report.
+func (v *stubAttestationVerifier) SNPAttestation(attestation *spb.Attestation, options *verify.Options) error {
+	if v.skipCheck {
+		return nil
+	}
+	return verify.SnpAttestation(attestation, options)
 }
 
-func TestValidateAzureCVM(t *testing.T) {
-	assert.NoError(t, validateCVM(vtpm.AttestationDocument{}, nil))
+type stubAttestationValidator struct {
+	skipCheck bool // whether the verification function should be called
 }
 
-func TestNewSNPReportFromBytes(t *testing.T) {
-	testCases := map[string]struct {
-		raw     string
-		wantErr bool
-	}{
-		"success": {
-			raw:     "02000000020000001f0003000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065d01000000000000000000000000000000d288b28c3e9640f4e8167c742c1dc9487dc7e2b23b3f52c96d0fb07ce60c675400000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c45c7e7a4a581d28d7f2ba99de06efc0282ace9ab62eb97044ce8aa6b215071affffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d000000000000000000000000000000000000000000000000d3cb828216ba0543a3d623bf904c7a908f4739b5c87856cab06e1762b15fe45e2cd4b8d88406789520b88eda62d8df36583181ca1039b735b8426953be40e812020000000000065d0133010001330100020000000000065d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b11a48bf77e60979777e25739acdf8b791ea9bab3ace88f173e3239acc657b02f418f5cc60615e36a95f4360334a9751000000000000000000000000000000000000000000000000c0280bf824034fbff4b18899f77f2557b98fa0bf3572d062bf860dbf9b9b498fd2a377f0209f6b993687f791981de71b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-			wantErr: false,
-		},
-		"too short": {
-			raw:     "02000000020000001f0003000000000001000000000000000000000000000000020000000000000000000000000000000000000001000000020000000000065d01000000000000000000000000000000d288b28c3e9640f4e8167c742c1dc9487dc7e2b23b3f52c96d0fb07ce60c675400000000000000000000000000000000000000000000000000000000000000005677f1de87289e7ad2c7e99c805d0468b1a9ccd83f0d245afa5242d405da4d5725852f8c6550564870e5f3206dfb1841000000000000000000000000000000000000000000000000000000000000000057e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c45c7e7a4a581d28d7f2ba99de06efc0282ace9ab62eb97044ce8aa6b215071affffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff020000000000065d000000000000000000000000000000000000000000000000d3cb828216ba0543a3d623bf904c7a908f4739b5c87856cab06e1762b15fe45e2cd4b8d88406789520b88eda62d8df36583181ca1039b735b8426953be40e812020000000000065d0133010001330100020000000000065d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b11a48bf77e60979777e25739acdf8b791ea9bab3ace88f173e3239acc657b02f418f5cc60615e36a95f4360334a9751000000000000000000000000000000000000000000000000c0280bf824034fbff4b18899f77f2557b98fa0bf3572d062bf860dbf9b9b498fd2a377f0209f6b993687f791981de71b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-			wantErr: true,
-		},
+// SNPAttestation validates the attestation report against the given set of constraints.
+func (v *stubAttestationValidator) SNPAttestation(attestation *spb.Attestation, options *validate.Options) error {
+	if v.skipCheck {
+		return nil
 	}
+	return validate.SnpAttestation(attestation, options)
+}
 
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) {
-			assert := assert.New(t)
-
-			instanceInfo, err := newStubAzureInstanceInfo("", "", tc.raw, "")
-			assert.NoError(err)
-			report, err := newSNPReportFromBytes(instanceInfo.AttestationReport)
-			if tc.wantErr {
-				assert.Error(err)
-			} else {
-				assert.NoError(err)
-				assert.NotNil(report)
-				assert.Equal(hex.EncodeToString(report.IDKeyDigest[:]), "57e229e0ffe5fa92d0faddff6cae0e61c926fc9ef9afd20a8b8cfcf7129db9338cbe5bf3f6987733a2bf65d06dc38fc1")
-				// This is a canary for us: If this fails in the future we possibly downgraded a SVN.
-				cfg := config.DefaultForAzureSEVSNP()
-				assert.True(report.LaunchTCB.isVersion(cfg.BootloaderVersion, cfg.TEEVersion, cfg.SNPVersion, cfg.MicrocodeVersion))
-			}
-		})
-	}
+type stubInstanceInfo struct {
+	AttestationReport []byte
+	ReportSigner      []byte
+	CertChain         []byte
+	Azure             *stubAzureInstanceInfo
 }
 
 type stubAzureInstanceInfo struct {
-	Vcek              []byte
-	CertChain         []byte
-	AttestationReport []byte
-	RuntimeData       []byte
+	RuntimeData []byte
 }
 
-func newStubAzureInstanceInfo(vcek string, certChain string, report string, runtimeData string) (stubAzureInstanceInfo, error) {
+func newStubInstanceInfo(vcek, certChain []byte, report, runtimeData string) (stubInstanceInfo, error) {
 	validReport, err := hex.DecodeString(report)
 	if err != nil {
-		return stubAzureInstanceInfo{}, fmt.Errorf("invalid hex string report: %s", err)
+		return stubInstanceInfo{}, fmt.Errorf("invalid hex string report: %s", err)
 	}
 
 	decodedRuntime, err := hex.DecodeString(runtimeData)
 	if err != nil {
-		return stubAzureInstanceInfo{}, fmt.Errorf("invalid hex string runtimeData: %s", err)
+		return stubInstanceInfo{}, fmt.Errorf("invalid hex string runtimeData: %s", err)
 	}
 
-	return stubAzureInstanceInfo{
-		Vcek:              []byte(vcek),
-		CertChain:         []byte(certChain),
+	return stubInstanceInfo{
 		AttestationReport: validReport,
-		RuntimeData:       decodedRuntime,
+		ReportSigner:      vcek,
+		CertChain:         certChain,
+		Azure: &stubAzureInstanceInfo{
+			RuntimeData: decodedRuntime,
+		},
 	}, nil
 }
 
-func (s *stubAzureInstanceInfo) validateAk(runtimeDataRaw []byte, reportData []byte, _ *tpm2.RSAParams) error {
-	var runtimeData runtimeData
-	if err := json.Unmarshal(runtimeDataRaw, &runtimeData); err != nil {
+type stubAttestationKey struct{}
+
+func (s *stubAttestationKey) Validate(runtimeDataRaw []byte, reportData []byte, _ *tpm2.RSAParams) error {
+	if err := json.Unmarshal(runtimeDataRaw, s); err != nil {
 		return fmt.Errorf("unmarshalling json: %w", err)
 	}
 

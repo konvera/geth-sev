@@ -11,18 +11,18 @@ import (
 	"testing"
 
 	"github.com/konvera/geth-sev/constellation/atls"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/grpc/atlscredentials"
 	"github.com/konvera/geth-sev/constellation/grpc/testdialer"
-	"github.com/konvera/geth-sev/constellation/variant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/test/grpc_testing"
+	"google.golang.org/grpc/interop/grpc_testing"
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	goleak.VerifyTestMain(m, goleak.IgnoreAnyFunction("github.com/bazelbuild/rules_go/go/tools/bzltestutil.RegisterTimeoutHandler.func1"))
 }
 
 func TestDial(t *testing.T) {

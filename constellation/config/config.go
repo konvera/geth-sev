@@ -19,6 +19,7 @@ All config relevant definitions, parsing and validation functions should go here
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -30,62 +31,72 @@ import (
 	ut "github.com/go-playground/universal-translator"
 	"github.com/go-playground/validator/v10"
 	en_translations "github.com/go-playground/validator/v10/translations/en"
+	"gopkg.in/yaml.v3"
 
+	"github.com/konvera/geth-sev/constellation/api/attestationconfigapi"
+	"github.com/konvera/geth-sev/constellation/api/versionsapi"
 	"github.com/konvera/geth-sev/constellation/attestation/idkeydigest"
 	"github.com/konvera/geth-sev/constellation/attestation/measurements"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/cloud/cloudprovider"
-	"github.com/konvera/geth-sev/constellation/compatibility"
 	"github.com/konvera/geth-sev/constellation/config/imageversion"
 	"github.com/konvera/geth-sev/constellation/constants"
+	"github.com/konvera/geth-sev/constellation/encoding"
 	"github.com/konvera/geth-sev/constellation/file"
-	"github.com/konvera/geth-sev/constellation/variant"
+	"github.com/konvera/geth-sev/constellation/semver"
 	"github.com/konvera/geth-sev/constellation/versions"
 )
 
-// Measurements is a required alias since docgen is not able to work with
-// types in other packages.
-type Measurements = measurements.M
-
-// Digests is a required alias since docgen is not able to work with
-// types in other packages.
-type Digests = idkeydigest.List
-
 const (
-	// Version2 is the second version number for Constellation config file.
-	Version2 = "v2"
+	// Version4 is the fourth version number for Constellation config file.
+	Version4 = "v4"
 
 	defaultName = "constell"
+
+	appRegistrationErrStr = "Azure app registrations are not supported since v2.9. Migrate to using a user assigned managed identity by following the migration guide: https://docs.edgeless.systems/constellation/reference/migration.\nPlease remove it from your config and from the Kubernetes secret in your running cluster. Ensure that the UAMI has all required permissions."
 )
 
 // Config defines configuration used by CLI.
 type Config struct {
 	// description: |
 	//   Schema version of this configuration file.
-	Version string `yaml:"version" validate:"eq=v2"`
+	Version string `yaml:"version" validate:"eq=v4"`
 	// description: |
 	//   Machine image version used to create Constellation nodes.
-	Image string `yaml:"image" validate:"required,version_compatibility"`
+	Image string `yaml:"image" validate:"required,image_compatibility"`
 	// description: |
 	//   Name of the cluster.
 	Name string `yaml:"name" validate:"valid_name,required"`
 	// description: |
-	//   Size (in GB) of a node's disk to store the non-volatile state.
-	StateDiskSizeGB int `yaml:"stateDiskSizeGB" validate:"min=0"`
-	// description: |
 	//   Kubernetes version to be installed into the cluster.
-	KubernetesVersion string `yaml:"kubernetesVersion" validate:"required,supported_k8s_version"`
+	KubernetesVersion versions.ValidK8sVersion `yaml:"kubernetesVersion" validate:"required,supported_k8s_version"`
 	// description: |
 	//   Microservice version to be installed into the cluster. Defaults to the version of the CLI.
-	MicroserviceVersion string `yaml:"microserviceVersion" validate:"required,version_compatibility"`
+	MicroserviceVersion semver.Semver `yaml:"microserviceVersion" validate:"required"`
 	// description: |
-	//   DON'T USE IN PRODUCTION: enable debug mode and use debug images. For usage, see: https://github.com/edgelesssys/constellation/blob/main/debugd/README.md
+	//   DON'T USE IN PRODUCTION: enable debug mode and use debug images.
 	DebugCluster *bool `yaml:"debugCluster" validate:"required"`
 	// description: |
-	//   Attestation variant used to verify the integrity of a node.
-	AttestationVariant string `yaml:"attestationVariant,omitempty" validate:"valid_attestation_variant"` // TODO: v2.8: Mark required
+	//   Optional custom endpoint (DNS name) for the Constellation API server.
+	//   This can be used to point a custom dns name at the Constellation API server
+	//   and is added to the Subject Alternative Name (SAN) field of the TLS certificate used by the API server.
+	//   A fallback to DNS name is always available.
+	CustomEndpoint string `yaml:"customEndpoint" validate:"omitempty,hostname_rfc1123"`
+	// description: |
+	//   Flag to enable/disable the internal load balancer. If enabled, the Constellation is only accessible from within the VPC.
+	InternalLoadBalancer bool `yaml:"internalLoadBalancer" validate:"omitempty"`
+	// description: |
+	//   The Kubernetes Service CIDR to be used for the cluster. This value will only be used during the first initialization of the Constellation.
+	ServiceCIDR string `yaml:"serviceCIDR" validate:"omitempty,cidrv4"`
 	// description: |
 	//   Supported cloud providers and their specific configurations.
 	Provider ProviderConfig `yaml:"provider" validate:"dive"`
+	// description: |
+	//   Node groups to be created in the cluster.
+	NodeGroups map[string]NodeGroup `yaml:"nodeGroups" validate:"required,dive"`
+	// description: |
+	//   Configuration for attestation validation. This configuration provides sensible defaults for the Constellation version it was created for.\nSee the docs for an overview on attestation: https://docs.edgeless.systems/constellation/architecture/attestation
+	Attestation AttestationConfig `yaml:"attestation" validate:"dive"`
 }
 
 // ProviderConfig are cloud-provider specific configuration values used by the CLI.
@@ -113,25 +124,22 @@ type ProviderConfig struct {
 type AWSConfig struct {
 	// description: |
 	//   AWS data center region. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html#concepts-available-regions
-	Region string `yaml:"region" validate:"required"`
+	Region string `yaml:"region" validate:"required,aws_region"`
 	// description: |
 	//   AWS data center zone name in defined region. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html#concepts-availability-zones
-	Zone string `yaml:"zone" validate:"required"`
+	Zone string `yaml:"zone" validate:"required,aws_zone"`
 	// description: |
-	//   VM instance type to use for Constellation nodes. Needs to support NitroTPM. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enable-nitrotpm-prerequisites.html
-	InstanceType string `yaml:"instanceType" validate:"lowercase,aws_instance_type"`
-	// description: |
-	//   Type of a node's state disk. The type influences boot time and I/O performance. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-volume-types.html
-	StateDiskType string `yaml:"stateDiskType" validate:"oneof=standard gp2 gp3 st1 sc1 io1"`
-	// description: |
-	//   Name of the IAM profile to use for the control plane nodes.
+	//   Name of the IAM profile to use for the control-plane nodes.
 	IAMProfileControlPlane string `yaml:"iamProfileControlPlane" validate:"required"`
 	// description: |
 	//   Name of the IAM profile to use for the worker nodes.
 	IAMProfileWorkerNodes string `yaml:"iamProfileWorkerNodes" validate:"required"`
 	// description: |
-	//   Expected VM measurements.
-	Measurements Measurements `yaml:"measurements" validate:"required,no_placeholders"`
+	//   Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage
+	DeployCSIDriver *bool `yaml:"deployCSIDriver" validate:"required"`
+	// description: |
+	//   Use the specified AWS Marketplace image offering.
+	UseMarketplaceImage *bool `yaml:"useMarketplaceImage" validate:"omitempty"`
 }
 
 // AzureConfig are Azure specific configuration values used by the CLI.
@@ -152,35 +160,14 @@ type AzureConfig struct {
 	//   Authorize spawned VMs to access Azure API.
 	UserAssignedIdentity string `yaml:"userAssignedIdentity" validate:"required"`
 	// description: |
-	//    Application client ID of the Active Directory app registration.
-	AppClientID string `yaml:"appClientID" validate:"uuid"`
-	// description: |
-	//    Client secret value of the Active Directory app registration credentials. Alternatively leave empty and pass value via CONSTELL_AZURE_CLIENT_SECRET_VALUE environment variable.
-	ClientSecretValue string `yaml:"clientSecretValue" validate:"required"`
-	// description: |
-	//   VM instance type to use for Constellation nodes.
-	InstanceType string `yaml:"instanceType" validate:"azure_instance_type"`
-	// description: |
-	//   Type of a node's state disk. The type influences boot time and I/O performance. See: https://docs.microsoft.com/en-us/azure/virtual-machines/disks-types#disk-type-comparison
-	StateDiskType string `yaml:"stateDiskType" validate:"oneof=Premium_LRS Premium_ZRS Standard_LRS StandardSSD_LRS StandardSSD_ZRS"`
-	// description: |
 	//   Deploy Azure Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage
 	DeployCSIDriver *bool `yaml:"deployCSIDriver" validate:"required"`
-	// description: |
-	//   Use Confidential VMs. Always needs to be true.
-	ConfidentialVM *bool `yaml:"confidentialVM,omitempty" validate:"omitempty,deprecated"` // TODO: v2.8 remove
 	// description: |
 	//   Enable secure boot for VMs. If enabled, the OS image has to include a virtual machine guest state (VMGS) blob.
 	SecureBoot *bool `yaml:"secureBoot" validate:"required"`
 	// description: |
-	//   List of accepted values for the field 'idkeydigest' in the AMD SEV-SNP attestation report. Only usable with ConfidentialVMs. See 4.6 and 7.3 in: https://www.amd.com/system/files/TechDocs/56860.pdf
-	IDKeyDigest Digests `yaml:"idKeyDigest" validate:"required_if=EnforceIdKeyDigest true,omitempty"`
-	// description: |
-	//   Enforce the specified idKeyDigest value during remote attestation.
-	EnforceIDKeyDigest idkeydigest.Enforcement `yaml:"enforceIdKeyDigest" validate:"required"`
-	// description: |
-	//   Expected confidential VM measurements.
-	Measurements Measurements `yaml:"measurements" validate:"required,no_placeholders"`
+	//   Use the specified Azure Marketplace image offering.
+	UseMarketplaceImage *bool `yaml:"useMarketplaceImage" validate:"omitempty"`
 }
 
 // GCPConfig are GCP specific configuration values used by the CLI.
@@ -198,17 +185,11 @@ type GCPConfig struct {
 	//   Path of service account key file. For required service account roles, see https://docs.edgeless.systems/constellation/getting-started/install#authorization
 	ServiceAccountKeyPath string `yaml:"serviceAccountKeyPath" validate:"required"`
 	// description: |
-	//   VM instance type to use for Constellation nodes.
-	InstanceType string `yaml:"instanceType" validate:"gcp_instance_type"`
-	// description: |
-	//   Type of a node's state disk. The type influences boot time and I/O performance. See: https://cloud.google.com/compute/docs/disks#disk-types
-	StateDiskType string `yaml:"stateDiskType" validate:"oneof=pd-standard pd-balanced pd-ssd"`
-	// description: |
 	//   Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage
 	DeployCSIDriver *bool `yaml:"deployCSIDriver" validate:"required"`
 	// description: |
-	//   Expected confidential VM measurements.
-	Measurements Measurements `yaml:"measurements" validate:"required,no_placeholders"`
+	//   Use the specified GCP Marketplace image offering.
+	UseMarketplaceImage *bool `yaml:"useMarketplaceImage" validate:"omitempty"`
 }
 
 // OpenStackConfig holds config information for OpenStack based Constellation deployments.
@@ -217,44 +198,33 @@ type OpenStackConfig struct {
 	//   OpenStack cloud name to select from "clouds.yaml". Only required if config file for OpenStack is used. Fallback authentication uses environment variables. For details see: https://docs.openstack.org/openstacksdk/latest/user/config/configuration.html.
 	Cloud string `yaml:"cloud"`
 	// description: |
+	//   Path to OpenStack "clouds.yaml" file. Only required if automatic detection fails.
+	CloudsYAMLPath string `yaml:"cloudsYAMLPath"`
+	// description: |
 	//   Availability zone to place the VMs in. For details see: https://docs.openstack.org/nova/latest/admin/availability-zones.html
 	AvailabilityZone string `yaml:"availabilityZone" validate:"required"`
-	// description: |
-	//   Flavor ID (machine type) to use for the VMs. For details see: https://docs.openstack.org/nova/latest/admin/flavors.html
-	FlavorID string `yaml:"flavorID" validate:"required"`
 	// description: |
 	//   Floating IP pool to use for the VMs. For details see: https://docs.openstack.org/ocata/user-guide/cli-manage-ip-addresses.html
 	FloatingIPPoolID string `yaml:"floatingIPPoolID" validate:"required"`
 	// description: |
-	// AuthURL is the OpenStack Identity endpoint to use inside the cluster.
-	AuthURL string `yaml:"authURL" validate:"required"`
-	// description: |
-	//   ProjectID is the ID of the project where a user resides.
-	ProjectID string `yaml:"projectID" validate:"required"`
-	// description: |
-	//   ProjectName is the name of the project where a user resides.
-	ProjectName string `yaml:"projectName" validate:"required"`
-	// description: |
-	//   UserDomainName is the name of the domain where a user resides.
-	UserDomainName string `yaml:"userDomainName" validate:"required"`
-	// description: |
-	//   ProjectDomainName is the name of the domain where a project resides.
-	ProjectDomainName string `yaml:"projectDomainName" validate:"required"`
+	//   STACKITProjectID is the ID of the STACKIT project where a user resides.
+	//   Only used if cloud is "stackit".
+	STACKITProjectID string `yaml:"stackitProjectID"`
 	// description: |
 	// RegionName is the name of the region to use inside the cluster.
 	RegionName string `yaml:"regionName" validate:"required"`
 	// description: |
-	//   Username to use inside the cluster.
-	Username string `yaml:"username" validate:"required"`
+	//   Deploy Yawol loadbalancer. For details see: https://github.com/stackitcloud/yawol
+	DeployYawolLoadBalancer *bool `yaml:"deployYawolLoadBalancer" validate:"required"`
 	// description: |
-	//   Password to use inside the cluster. You can instead use the environment variable "CONSTELL_OS_PASSWORD".
-	Password string `yaml:"password"`
+	//   OpenStack OS image used by the yawollet. For details see: https://github.com/stackitcloud/yawol
+	YawolImageID string `yaml:"yawolImageID"`
 	// description: |
-	//   If enabled, downloads OS image directly from source URL to OpenStack. Otherwise, downloads image to local machine and uploads to OpenStack.
-	DirectDownload *bool `yaml:"directDownload" validate:"required"`
+	//   OpenStack flavor id used for yawollets. For details see: https://github.com/stackitcloud/yawol
+	YawolFlavorID string `yaml:"yawolFlavorID"`
 	// description: |
-	//   Measurement used to enable measured boot.
-	Measurements Measurements `yaml:"measurements" validate:"required,no_placeholders"`
+	//   Deploy Cinder CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage
+	DeployCSIDriver *bool `yaml:"deployCSIDriver" validate:"required"`
 }
 
 // QEMUConfig holds config information for QEMU based Constellation deployments.
@@ -283,29 +253,82 @@ type QEMUConfig struct {
 	// description: |
 	//   Path to the OVMF firmware. Leave empty for auto selection.
 	Firmware string `yaml:"firmware"`
+}
+
+// AttestationConfig configuration values used for attestation.
+// Fields should remain pointer-types so custom specific configs can nil them
+// if not required.
+type AttestationConfig struct {
 	// description: |
-	//   Measurement used to enable measured boot.
-	Measurements Measurements `yaml:"measurements" validate:"required,no_placeholders"`
+	//   AWS SEV-SNP attestation.
+	AWSSEVSNP *AWSSEVSNP `yaml:"awsSEVSNP,omitempty" validate:"omitempty,dive"`
+	// description: |
+	//   AWS Nitro TPM attestation.
+	AWSNitroTPM *AWSNitroTPM `yaml:"awsNitroTPM,omitempty" validate:"omitempty,dive"`
+	// description: |
+	//   Azure SEV-SNP attestation.\nFor details see: https://docs.edgeless.systems/constellation/architecture/attestation#cvm-verification
+	AzureSEVSNP *AzureSEVSNP `yaml:"azureSEVSNP,omitempty" validate:"omitempty,dive"`
+	// description: |
+	//   Azure TDX attestation.
+	AzureTDX *AzureTDX `yaml:"azureTDX,omitempty" validate:"omitempty,dive"`
+	// description: |
+	//   Azure TPM attestation (Trusted Launch).
+	AzureTrustedLaunch *AzureTrustedLaunch `yaml:"azureTrustedLaunch,omitempty" validate:"omitempty,dive"`
+	// description: |
+	//   GCP SEV-ES attestation.
+	GCPSEVES *GCPSEVES `yaml:"gcpSEVES,omitempty" validate:"omitempty,dive"`
+	// description: |
+	// 	 GCP SEV-SNP attestation.
+	GCPSEVSNP *GCPSEVSNP `yaml:"gcpSEVSNP,omitempty" validate:"omitempty,dive"`
+	// description: |
+	//   QEMU tdx attestation.
+	QEMUTDX *QEMUTDX `yaml:"qemuTDX,omitempty" validate:"omitempty,dive"`
+	// description: |
+	//   QEMU vTPM attestation.
+	QEMUVTPM *QEMUVTPM `yaml:"qemuVTPM,omitempty" validate:"omitempty,dive"`
+}
+
+// NodeGroup defines a group of nodes with the same role and configuration.
+// Cloud providers use scaling groups to manage nodes of a group.
+type NodeGroup struct {
+	// description: |
+	//   Role of the nodes in this group. Valid values are "control-plane" and "worker".
+	Role string `yaml:"role" validate:"required,oneof=control-plane worker"`
+	// description: |
+	//   Availability zone to place the VMs in.
+	Zone string `yaml:"zone" validate:"valid_zone"`
+	// description: |
+	//   VM instance type to use for the nodes.
+	InstanceType string `yaml:"instanceType" validate:"instance_type"`
+	// description: |
+	//   Size (in GB) of a node's disk to store the non-volatile state.
+	StateDiskSizeGB int `yaml:"stateDiskSizeGB" validate:"min=0"`
+	// description: |
+	//   Type of a node's state disk. The type influences boot time and I/O performance.
+	StateDiskType string `yaml:"stateDiskType" validate:"disk_type"`
+	// description: |
+	//   Number of nodes to be initially created.
+	InitialCount int `yaml:"initialCount" validate:"min=0"`
 }
 
 // Default returns a struct with the default config.
+// IMPORTANT: Ensure that any state mutation is followed by a call to Validate() to ensure that the config is always in a valid state. Avoid usage outside of tests.
 func Default() *Config {
 	return &Config{
-		Version:             Version2,
+		Version:             Version4,
 		Image:               defaultImage,
 		Name:                defaultName,
-		MicroserviceVersion: compatibility.EnsurePrefixV(constants.VersionInfo()),
-		KubernetesVersion:   string(versions.Default),
-		StateDiskSizeGB:     30,
+		MicroserviceVersion: constants.BinaryVersion(),
+		KubernetesVersion:   versions.Default,
 		DebugCluster:        toPtr(false),
+		ServiceCIDR:         "10.96.0.0/12",
 		Provider: ProviderConfig{
 			AWS: &AWSConfig{
 				Region:                 "",
-				InstanceType:           "m6a.xlarge",
-				StateDiskType:          "gp3",
 				IAMProfileControlPlane: "",
 				IAMProfileWorkerNodes:  "",
-				Measurements:           measurements.DefaultsFor(cloudprovider.AWS),
+				DeployCSIDriver:        toPtr(true),
+				UseMarketplaceImage:    toPtr(false),
 			},
 			Azure: &AzureConfig{
 				SubscriptionID:       "",
@@ -313,27 +336,21 @@ func Default() *Config {
 				Location:             "",
 				UserAssignedIdentity: "",
 				ResourceGroup:        "",
-				InstanceType:         "Standard_DC4as_v5",
-				StateDiskType:        "Premium_LRS",
 				DeployCSIDriver:      toPtr(true),
-				IDKeyDigest:          idkeydigest.DefaultList(),
-				EnforceIDKeyDigest:   idkeydigest.MAAFallback,
 				SecureBoot:           toPtr(false),
-				Measurements:         measurements.DefaultsFor(cloudprovider.Azure),
+				UseMarketplaceImage:  toPtr(false),
 			},
 			GCP: &GCPConfig{
 				Project:               "",
 				Region:                "",
 				Zone:                  "",
 				ServiceAccountKeyPath: "",
-				InstanceType:          "n2d-standard-4",
-				StateDiskType:         "pd-ssd",
 				DeployCSIDriver:       toPtr(true),
-				Measurements:          measurements.DefaultsFor(cloudprovider.GCP),
+				UseMarketplaceImage:   toPtr(false),
 			},
 			OpenStack: &OpenStackConfig{
-				DirectDownload: toPtr(true),
-				Measurements:   measurements.DefaultsFor(cloudprovider.OpenStack),
+				DeployYawolLoadBalancer: toPtr(true),
+				DeployCSIDriver:         toPtr(true),
 			},
 			QEMU: &QEMUConfig{
 				ImageFormat:           "raw",
@@ -343,10 +360,60 @@ func Default() *Config {
 				LibvirtURI:            "",
 				LibvirtContainerImage: imageversion.Libvirt(),
 				NVRAM:                 "production",
-				Measurements:          measurements.DefaultsFor(cloudprovider.QEMU),
 			},
 		},
+		NodeGroups: map[string]NodeGroup{
+			constants.DefaultControlPlaneGroupName: {
+				Role:            "control-plane",
+				Zone:            "",
+				InstanceType:    "",
+				StateDiskSizeGB: 30,
+				StateDiskType:   "",
+				InitialCount:    3,
+			},
+			constants.DefaultWorkerGroupName: {
+				Role:            "worker",
+				Zone:            "",
+				InstanceType:    "",
+				StateDiskSizeGB: 30,
+				StateDiskType:   "",
+				InitialCount:    1,
+			},
+		},
+		// TODO(malt3): remove default attestation config as soon as one-to-one mapping is no longer possible.
+		// Some problematic pairings:
+		// OpenStack uses qemu-vtpm as attestation variant
+		// QEMU uses qemu-vtpm as attestation variant
+		// AWS uses aws-nitro-tpm as attestation variant
+		// AWS will have aws-sev-snp as attestation variant
+		Attestation: AttestationConfig{
+			AWSSEVSNP:          DefaultForAWSSEVSNP(),
+			AWSNitroTPM:        &AWSNitroTPM{Measurements: measurements.DefaultsFor(cloudprovider.AWS, variant.AWSNitroTPM{})},
+			AzureSEVSNP:        DefaultForAzureSEVSNP(),
+			AzureTDX:           DefaultForAzureTDX(),
+			AzureTrustedLaunch: &AzureTrustedLaunch{Measurements: measurements.DefaultsFor(cloudprovider.Azure, variant.AzureTrustedLaunch{})},
+			GCPSEVES:           &GCPSEVES{Measurements: measurements.DefaultsFor(cloudprovider.GCP, variant.GCPSEVES{})},
+			GCPSEVSNP:          DefaultForGCPSEVSNP(),
+			QEMUVTPM:           &QEMUVTPM{Measurements: measurements.DefaultsFor(cloudprovider.QEMU, variant.QEMUVTPM{})},
+		},
 	}
+}
+
+// MiniDefault returns a default config for a mini cluster.
+func MiniDefault() (*Config, error) {
+	config := Default()
+	config.Name = constants.MiniConstellationUID
+	config.RemoveProviderAndAttestationExcept(cloudprovider.QEMU)
+	for groupName, group := range config.NodeGroups {
+		group.StateDiskSizeGB = 8
+		group.InitialCount = 1
+		config.NodeGroups[groupName] = group
+	}
+	// only release images (e.g. v2.7.0) use the production NVRAM
+	if !config.IsReleaseImage() {
+		config.Provider.QEMU.NVRAM = "testing"
+	}
+	return config, config.Validate(false)
 }
 
 // fromFile returns config file with `name` read from `fileHandler` by parsing
@@ -358,37 +425,67 @@ func fromFile(fileHandler file.Handler, name string) (*Config, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("unable to find %s - use `constellation config generate` to generate it first", name)
 		}
+		if isAppClientIDError(err) {
+			return nil, &UnsupportedAppRegistrationError{}
+		}
 		return nil, fmt.Errorf("could not load config from file %s: %w", name, err)
 	}
 	return &conf, nil
 }
 
+func isAppClientIDError(err error) bool {
+	var yamlErr *yaml.TypeError
+	if errors.As(err, &yamlErr) {
+		for _, e := range yamlErr.Errors {
+			if strings.Contains(e, "appClientID") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// UnsupportedAppRegistrationError is returned when the config contains configuration related to now unsupported app registrations.
+type UnsupportedAppRegistrationError struct{}
+
+func (e *UnsupportedAppRegistrationError) Error() string {
+	return appRegistrationErrStr
+}
+
 // New creates a new config by:
 // 1. Reading config file via provided fileHandler from file with name.
-// 2. Read secrets from environment variables.
-// 3. Validate config. If `--force` is set the version validation will be disabled and any version combination is allowed.
-func New(fileHandler file.Handler, name string, force bool) (*Config, error) {
+// 2. For "latest" version values of the attestation variants fetch the version numbers.
+// 3. Read secrets from environment variables.
+// 4. Validate config. If `--force` is set the version validation will be disabled and any version combination is allowed.
+func New(fileHandler file.Handler, name string, fetcher attestationconfigapi.Fetcher, force bool) (*Config, error) {
 	// Read config file
 	c, err := fromFile(fileHandler, name)
 	if err != nil {
 		return nil, err
 	}
 
+	if azure := c.Attestation.AzureSEVSNP; azure != nil {
+		if err := azure.FetchAndSetLatestVersionNumbers(context.Background(), fetcher); err != nil {
+			return c, err
+		}
+	}
+
+	if aws := c.Attestation.AWSSEVSNP; aws != nil {
+		if err := aws.FetchAndSetLatestVersionNumbers(context.Background(), fetcher); err != nil {
+			return c, err
+		}
+	}
+
+	if gcp := c.Attestation.GCPSEVSNP; gcp != nil {
+		if err := gcp.FetchAndSetLatestVersionNumbers(context.Background(), fetcher); err != nil {
+			return c, err
+		}
+	}
+
 	// Read secrets from env-vars.
 	clientSecretValue := os.Getenv(constants.EnvVarAzureClientSecretValue)
 	if clientSecretValue != "" && c.Provider.Azure != nil {
-		c.Provider.Azure.ClientSecretValue = clientSecretValue
-	}
-
-	openstackPassword := os.Getenv(constants.EnvVarOpenStackPassword)
-	if openstackPassword != "" && c.Provider.OpenStack != nil {
-		c.Provider.OpenStack.Password = openstackPassword
-	}
-
-	// Backwards compatibility: configs without the field `microserviceVersion` are valid in version 2.6.
-	// In case the field is not set in an old config we prefil it with the default value.
-	if c.MicroserviceVersion == "" {
-		c.MicroserviceVersion = Default().MicroserviceVersion
+		fmt.Fprintf(os.Stderr, "WARNING: the environment variable %s is no longer used %s", constants.EnvVarAzureClientSecretValue, appRegistrationErrStr)
 	}
 
 	return c, c.Validate(force)
@@ -412,22 +509,38 @@ func (c *Config) HasProvider(provider cloudprovider.Provider) bool {
 }
 
 // UpdateMeasurements overwrites measurements in config with the provided ones.
-func (c *Config) UpdateMeasurements(newMeasurements Measurements) {
-	if c.Provider.AWS != nil {
-		c.Provider.AWS.Measurements.CopyFrom(newMeasurements)
+func (c *Config) UpdateMeasurements(newMeasurements measurements.M) {
+	if c.Attestation.AWSSEVSNP != nil {
+		c.Attestation.AWSSEVSNP.Measurements.CopyFrom(newMeasurements)
 	}
-	if c.Provider.Azure != nil {
-		c.Provider.Azure.Measurements.CopyFrom(newMeasurements)
+	if c.Attestation.AWSNitroTPM != nil {
+		c.Attestation.AWSNitroTPM.Measurements.CopyFrom(newMeasurements)
 	}
-	if c.Provider.GCP != nil {
-		c.Provider.GCP.Measurements.CopyFrom(newMeasurements)
+	if c.Attestation.AzureSEVSNP != nil {
+		c.Attestation.AzureSEVSNP.Measurements.CopyFrom(newMeasurements)
 	}
-	if c.Provider.OpenStack != nil {
-		c.Provider.OpenStack.Measurements.CopyFrom(newMeasurements)
+	if c.Attestation.AzureTDX != nil {
+		c.Attestation.AzureTDX.Measurements.CopyFrom(newMeasurements)
 	}
-	if c.Provider.QEMU != nil {
-		c.Provider.QEMU.Measurements.CopyFrom(newMeasurements)
+	if c.Attestation.AzureTrustedLaunch != nil {
+		c.Attestation.AzureTrustedLaunch.Measurements.CopyFrom(newMeasurements)
 	}
+	if c.Attestation.GCPSEVES != nil {
+		c.Attestation.GCPSEVES.Measurements.CopyFrom(newMeasurements)
+	}
+	if c.Attestation.GCPSEVSNP != nil {
+		c.Attestation.GCPSEVSNP.Measurements.CopyFrom(newMeasurements)
+	}
+	if c.Attestation.QEMUVTPM != nil {
+		c.Attestation.QEMUVTPM.Measurements.CopyFrom(newMeasurements)
+	}
+}
+
+// RemoveProviderAndAttestationExcept calls RemoveProviderExcept and sets the default attestations for the provider (only used for convenience in tests).
+func (c *Config) RemoveProviderAndAttestationExcept(provider cloudprovider.Provider) {
+	c.RemoveProviderExcept(provider)
+	c.SetAttestation(variant.GetDefaultAttestation(provider))
+	c.SetCSPNodeGroupDefaults(provider)
 }
 
 // RemoveProviderExcept removes all provider specific configurations, i.e.,
@@ -436,6 +549,7 @@ func (c *Config) UpdateMeasurements(newMeasurements Measurements) {
 func (c *Config) RemoveProviderExcept(provider cloudprovider.Provider) {
 	currentProviderConfigs := c.Provider
 	c.Provider = ProviderConfig{}
+
 	switch provider {
 	case cloudprovider.AWS:
 		c.Provider.AWS = currentProviderConfigs.AWS
@@ -452,6 +566,30 @@ func (c *Config) RemoveProviderExcept(provider cloudprovider.Provider) {
 	}
 }
 
+// SetAttestation sets the attestation config for the given attestation variant and removes all other attestation configs.
+func (c *Config) SetAttestation(attestation variant.Variant) {
+	currentAttestationConfigs := c.Attestation
+	c.Attestation = AttestationConfig{}
+	switch attestation.(type) {
+	case variant.AWSSEVSNP:
+		c.Attestation = AttestationConfig{AWSSEVSNP: currentAttestationConfigs.AWSSEVSNP}
+	case variant.AWSNitroTPM:
+		c.Attestation = AttestationConfig{AWSNitroTPM: currentAttestationConfigs.AWSNitroTPM}
+	case variant.AzureSEVSNP:
+		c.Attestation = AttestationConfig{AzureSEVSNP: currentAttestationConfigs.AzureSEVSNP}
+	case variant.AzureTDX:
+		c.Attestation = AttestationConfig{AzureTDX: currentAttestationConfigs.AzureTDX}
+	case variant.AzureTrustedLaunch:
+		c.Attestation = AttestationConfig{AzureTrustedLaunch: currentAttestationConfigs.AzureTrustedLaunch}
+	case variant.GCPSEVES:
+		c.Attestation = AttestationConfig{GCPSEVES: currentAttestationConfigs.GCPSEVES}
+	case variant.GCPSEVSNP:
+		c.Attestation = AttestationConfig{GCPSEVSNP: currentAttestationConfigs.GCPSEVSNP}
+	case variant.QEMUVTPM:
+		c.Attestation = AttestationConfig{QEMUVTPM: currentAttestationConfigs.QEMUVTPM}
+	}
+}
+
 // IsDebugCluster checks whether the cluster is configured as a debug cluster.
 func (c *Config) IsDebugCluster() bool {
 	if c.DebugCluster != nil && *c.DebugCluster {
@@ -463,6 +601,15 @@ func (c *Config) IsDebugCluster() bool {
 // IsReleaseImage checks whether image name looks like a release image.
 func (c *Config) IsReleaseImage() bool {
 	return strings.HasPrefix(c.Image, "v")
+}
+
+// IsNamedLikeDebugImage checks whether image name looks like a debug image.
+func (c *Config) IsNamedLikeDebugImage() bool {
+	v, err := versionsapi.NewVersionFromShortPath(c.Image, versionsapi.VersionKindImage)
+	if err != nil {
+		return false
+	}
+	return v.Stream() == "debug"
 }
 
 // GetProvider returns the configured cloud provider.
@@ -485,46 +632,91 @@ func (c *Config) GetProvider() cloudprovider.Provider {
 	return cloudprovider.Unknown
 }
 
-// GetMeasurements returns the configured measurements or nil if no provder is set.
-func (c *Config) GetMeasurements() measurements.M {
-	if c.Provider.AWS != nil {
-		return c.Provider.AWS.Measurements
+// GetAttestationConfig returns the configured attestation config.
+func (c *Config) GetAttestationConfig() AttestationCfg {
+	if c.Attestation.AWSSEVSNP != nil {
+		return c.Attestation.AWSSEVSNP.getToMarshallLatestWithResolvedVersions()
 	}
-	if c.Provider.Azure != nil {
-		return c.Provider.Azure.Measurements
+	if c.Attestation.AWSNitroTPM != nil {
+		return c.Attestation.AWSNitroTPM
 	}
-	if c.Provider.GCP != nil {
-		return c.Provider.GCP.Measurements
+	if c.Attestation.AzureSEVSNP != nil {
+		return c.Attestation.AzureSEVSNP.getToMarshallLatestWithResolvedVersions()
 	}
-	if c.Provider.OpenStack != nil {
-		return c.Provider.OpenStack.Measurements
+	if c.Attestation.AzureTDX != nil {
+		return c.Attestation.AzureTDX.getToMarshallLatestWithResolvedVersions()
 	}
-	if c.Provider.QEMU != nil {
-		return c.Provider.QEMU.Measurements
+	if c.Attestation.AzureTrustedLaunch != nil {
+		return c.Attestation.AzureTrustedLaunch
 	}
-	return nil
+	if c.Attestation.GCPSEVES != nil {
+		return c.Attestation.GCPSEVES
+	}
+	if c.Attestation.GCPSEVSNP != nil {
+		return c.Attestation.GCPSEVSNP
+	}
+	if c.Attestation.QEMUVTPM != nil {
+		return c.Attestation.QEMUVTPM
+	}
+	return &DummyCfg{}
 }
 
-// IDKeyDigestPolicy returns the IDKeyDigest checking policy for a cloud provider.
-func (c *Config) IDKeyDigestPolicy() idkeydigest.Enforcement {
-	if c.Provider.Azure != nil {
-		return c.Provider.Azure.EnforceIDKeyDigest
+// GetRegion returns the configured region.
+func (c *Config) GetRegion() string {
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		return c.Provider.AWS.Region
+	case cloudprovider.Azure:
+		return c.Provider.Azure.Location
+	case cloudprovider.GCP:
+		return c.Provider.GCP.Region
+	case cloudprovider.OpenStack:
+		return c.Provider.OpenStack.RegionName
+	case cloudprovider.QEMU:
+		return ""
 	}
-	return idkeydigest.Unknown
+	return ""
 }
 
-// IDKeyDigests returns the ID Key Digests for the configured cloud provider.
-func (c *Config) IDKeyDigests() idkeydigest.List {
-	if c.Provider.Azure != nil {
-		return c.Provider.Azure.IDKeyDigest
+// GetZone returns the configured zone or location for providers without zone support (Azure).
+func (c *Config) GetZone() string {
+	switch c.GetProvider() {
+	case cloudprovider.AWS:
+		return c.Provider.AWS.Zone
+	case cloudprovider.Azure:
+		return c.Provider.Azure.Location
+	case cloudprovider.GCP:
+		return c.Provider.GCP.Zone
 	}
-	return nil
+	return ""
+}
+
+// UpdateMAAURL updates the MAA URL in the config.
+func (c *Config) UpdateMAAURL(maaURL string) {
+	if c.Attestation.AzureSEVSNP != nil {
+		c.Attestation.AzureSEVSNP.FirmwareSignerConfig.MAAURL = maaURL
+	}
 }
 
 // DeployCSIDriver returns whether the CSI driver should be deployed for a given cloud provider.
 func (c *Config) DeployCSIDriver() bool {
 	return c.Provider.Azure != nil && c.Provider.Azure.DeployCSIDriver != nil && *c.Provider.Azure.DeployCSIDriver ||
-		c.Provider.GCP != nil && c.Provider.GCP.DeployCSIDriver != nil && *c.Provider.GCP.DeployCSIDriver
+		c.Provider.AWS != nil && c.Provider.AWS.DeployCSIDriver != nil && *c.Provider.AWS.DeployCSIDriver ||
+		c.Provider.GCP != nil && c.Provider.GCP.DeployCSIDriver != nil && *c.Provider.GCP.DeployCSIDriver ||
+		c.Provider.OpenStack != nil && c.Provider.OpenStack.DeployCSIDriver != nil && *c.Provider.OpenStack.DeployCSIDriver
+}
+
+// DeployYawolLoadBalancer returns whether the Yawol load balancer should be deployed.
+func (c *Config) DeployYawolLoadBalancer() bool {
+	return c.Provider.OpenStack != nil && c.Provider.OpenStack.DeployYawolLoadBalancer != nil && *c.Provider.OpenStack.DeployYawolLoadBalancer
+}
+
+// UseMarketplaceImage returns whether a marketplace image should be used.
+func (c *Config) UseMarketplaceImage() bool {
+	return (c.Provider.Azure != nil && c.Provider.Azure.UseMarketplaceImage != nil && *c.Provider.Azure.UseMarketplaceImage) ||
+		(c.Provider.GCP != nil && c.Provider.GCP.UseMarketplaceImage != nil && *c.Provider.GCP.UseMarketplaceImage) ||
+		(c.Provider.AWS != nil && c.Provider.AWS.UseMarketplaceImage != nil && *c.Provider.AWS.UseMarketplaceImage) ||
+		(c.Provider.OpenStack != nil && c.Provider.OpenStack.Cloud == "stackit")
 }
 
 // Validate checks the config values and returns validation errors.
@@ -547,15 +739,7 @@ func (c *Config) Validate(force bool) error {
 	})
 
 	// Register AWS, Azure & GCP InstanceType validation error types
-	if err := validate.RegisterTranslation("aws_instance_type", trans, registerTranslateAWSInstanceTypeError, translateAWSInstanceTypeError); err != nil {
-		return err
-	}
-
-	if err := validate.RegisterTranslation("azure_instance_type", trans, registerTranslateAzureInstanceTypeError, c.translateAzureInstanceTypeError); err != nil {
-		return err
-	}
-
-	if err := validate.RegisterTranslation("gcp_instance_type", trans, registerTranslateGCPInstanceTypeError, translateGCPInstanceTypeError); err != nil {
+	if err := validate.RegisterTranslation("instance_type", trans, c.registerTranslateInstanceTypeError, c.translateInstanceTypeError); err != nil {
 		return err
 	}
 
@@ -576,15 +760,11 @@ func (c *Config) Validate(force bool) error {
 		return err
 	}
 
-	if err := validate.RegisterTranslation("version_compatibility", trans, registerVersionCompatibilityError, translateVersionCompatibilityError); err != nil {
+	if err := validate.RegisterTranslation("image_compatibility", trans, registerImageCompatibilityError, translateImageCompatibilityError); err != nil {
 		return err
 	}
 
-	if err := validate.RegisterTranslation("valid_name", trans, registerValidateNameError, c.translateValidateNameError); err != nil {
-		return err
-	}
-
-	if err := validate.RegisterTranslation("valid_attestation_variant", trans, registerValidAttestVariantError, c.translateValidAttestVariantError); err != nil {
+	if err := validate.RegisterTranslation("valid_name", trans, c.registerValidateNameError, c.translateValidateNameError); err != nil {
 		return err
 	}
 
@@ -605,26 +785,18 @@ func (c *Config) Validate(force bool) error {
 	if force {
 		versionCompatibilityValidator = returnsTrue
 	}
-	if err := validate.RegisterValidation("version_compatibility", versionCompatibilityValidator); err != nil {
+	if err := validate.RegisterValidation("image_compatibility", versionCompatibilityValidator); err != nil {
 		return err
 	}
 
-	// register custom validator with label aws_instance_type to validate the AWS instance type from config input.
-	if err := validate.RegisterValidation("aws_instance_type", validateAWSInstanceType); err != nil {
+	if err := validate.RegisterValidation("disk_type", c.validateStateDiskTypeField); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("disk_type", trans, registerTranslateDiskTypeError, c.translateDiskTypeError); err != nil {
 		return err
 	}
 
-	// register custom validator with label azure_instance_type to validate the Azure instance type from config input.
-	if err := validate.RegisterValidation("azure_instance_type", c.validateAzureInstanceType); err != nil {
-		return err
-	}
-
-	// register custom validator with label gcp_instance_type to validate the GCP instance type from config input.
-	if err := validate.RegisterValidation("gcp_instance_type", validateGCPInstanceType); err != nil {
-		return err
-	}
-
-	if err := validate.RegisterValidation("valid_attestation_variant", c.validAttestVariant); err != nil {
+	if err := validate.RegisterValidation("instance_type", c.validateInstanceType); err != nil {
 		return err
 	}
 
@@ -634,6 +806,74 @@ func (c *Config) Validate(force bool) error {
 
 	// Register provider validation
 	validate.RegisterStructValidation(validateProvider, ProviderConfig{})
+
+	// Register NodeGroup validation error types
+	if err := validate.RegisterTranslation("no_default_control_plane_group", trans, registerNoDefaultControlPlaneGroupError, translateNoDefaultControlPlaneGroupError); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("no_default_worker_group", trans, registerNoDefaultWorkerGroupError, translateNoDefaultWorkerGroupError); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("control_plane_group_initial_count", trans, registerControlPlaneGroupInitialCountError, translateControlPlaneGroupInitialCountError); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("control_plane_group_role_mismatch", trans, registerControlPlaneGroupRoleMismatchError, translateControlPlaneGroupRoleMismatchError); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("worker_group_role_mismatch", trans, registerWorkerGroupRoleMismatchError, translateWorkerGroupRoleMismatchError); err != nil {
+		return err
+	}
+
+	// Register NodeGroup validation
+	validate.RegisterStructValidation(validateNodeGroups, Config{})
+
+	// Register Attestation validation error types
+	if err := validate.RegisterTranslation("no_attestation", trans, registerNoAttestationError, translateNoAttestationError); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("more_than_one_attestation", trans, registerMoreThanOneAttestationError, c.translateMoreThanOneAttestationError); err != nil {
+		return err
+	}
+
+	if err := validate.RegisterValidation("valid_zone", c.validateNodeGroupZoneField); err != nil {
+		return err
+	}
+	if err := validate.RegisterValidation("aws_region", validateAWSRegionField); err != nil {
+		return err
+	}
+	if err := validate.RegisterValidation("aws_zone", validateAWSZoneField); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("valid_zone", trans, registerValidZoneError, c.translateValidZoneError); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("aws_region", trans, registerAWSRegionError, translateAWSRegionError); err != nil {
+		return err
+	}
+	if err := validate.RegisterTranslation("aws_zone", trans, registerAWSZoneError, translateAWSZoneError); err != nil {
+		return err
+	}
+
+	validate.RegisterStructValidation(validateMeasurement, measurements.Measurement{})
+	validate.RegisterStructValidation(validateAttestation, AttestationConfig{})
+
+	if !force {
+		// Validating MicroserviceVersion separately is required since it is a custom type.
+		// The validation pkg we use does not allow accessing the field name during struct validation.
+		// Because of this we can't print the offending field name in the error message, resulting in
+		// suboptimal UX. Adding the field name to the struct validation of Semver would make it
+		// impossible to use Semver for other fields.
+		if err := ValidateMicroserviceVersion(constants.BinaryVersion(), c.MicroserviceVersion); err != nil {
+			msg := "microserviceVersion: " + msgFromCompatibilityError(err, constants.BinaryVersion().String(), c.MicroserviceVersion.String())
+			return &ValidationError{validationErrMsgs: []string{msg}}
+		}
+	}
+
+	if c.InternalLoadBalancer {
+		if c.GetProvider() != cloudprovider.AWS && c.GetProvider() != cloudprovider.GCP {
+			return &ValidationError{validationErrMsgs: []string{"internalLoadBalancer is only supported for AWS and GCP"}}
+		}
+	}
 
 	err := validate.Struct(c)
 	if err == nil {
@@ -653,75 +893,68 @@ func (c *Config) Validate(force bool) error {
 	return &ValidationError{validationErrMsgs: validationErrMsgs}
 }
 
-// AWSNitroTPM is the configuration for AWS Nitro TPM attestation.
-type AWSNitroTPM struct {
-	// description: |
-	//   Expected TPM measurements.
-	Measurements measurements.M `json:"measurements" yaml:"measurements"`
-}
-
-// GetVariant returns aws-nitro-tpm as the variant.
-func (AWSNitroTPM) GetVariant() variant.Variant {
-	return variant.AWSNitroTPM{}
-}
-
-// GetMeasurements returns the measurements used for attestation.
-func (c AWSNitroTPM) GetMeasurements() measurements.M {
-	return c.Measurements
-}
-
-// AzureSEVSNP is the configuration for Azure SEV-SNP attestation.
-type AzureSEVSNP struct {
-	// description: |
-	//   Expected confidential VM measurements.
-	Measurements measurements.M `json:"measurements" yaml:"measurements"`
-	// description: |
-	//   Lowest acceptable bootloader version.
-	BootloaderVersion uint8 `json:"bootloaderVersion" yaml:"bootloaderVersion"`
-	// description: |
-	//   Lowest acceptable TEE version.
-	TEEVersion uint8 `json:"teeVersion" yaml:"teeVersion"`
-	// description: |
-	//   Lowest acceptable SEV-SNP version.
-	SNPVersion uint8 `json:"snpVersion" yaml:"snpVersion"`
-	// description: |
-	//   Lowest acceptable microcode version.
-	MicrocodeVersion uint8 `json:"microcodeVersion" yaml:"microcodeVersion"`
-	// description: |
-	//   Configuration for validating the firmware signature.
-	FirmwareSignerConfig SNPFirmwareSignerConfig `json:"firmwareSignerConfig" yaml:"firmwareSignerConfig"`
-	// description: |
-	//   AMD Root Key certificate used to verify the SEV-SNP certificate chain.
-	AMDRootKey Certificate `json:"amdRootKey" yaml:"amdRootKey"`
-}
-
-// DefaultForAzureSEVSNP returns the default configuration for Azure SEV-SNP attestation.
-// Version numbers are hard coded and should be updated with each new release.
-// TODO(AB#3042): replace with dynamic lookup for configurable values.
-func DefaultForAzureSEVSNP() AzureSEVSNP {
-	return AzureSEVSNP{
-		Measurements:      measurements.DefaultsFor(cloudprovider.Azure),
-		BootloaderVersion: 2,
-		TEEVersion:        0,
-		SNPVersion:        6,
-		MicrocodeVersion:  93,
-		FirmwareSignerConfig: SNPFirmwareSignerConfig{
-			AcceptedKeyDigests: idkeydigest.DefaultList(),
-			EnforcementPolicy:  idkeydigest.MAAFallback,
-		},
-		// AMD root key. Received from the AMD Key Distribution System API (KDS).
-		AMDRootKey: mustParsePEM(`-----BEGIN CERTIFICATE-----\nMIIGYzCCBBKgAwIBAgIDAQAAMEYGCSqGSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAIC\nBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZIAWUDBAICBQCiAwIBMKMDAgEBMHsxFDAS\nBgNVBAsMC0VuZ2luZWVyaW5nMQswCQYDVQQGEwJVUzEUMBIGA1UEBwwLU2FudGEg\nQ2xhcmExCzAJBgNVBAgMAkNBMR8wHQYDVQQKDBZBZHZhbmNlZCBNaWNybyBEZXZp\nY2VzMRIwEAYDVQQDDAlBUkstTWlsYW4wHhcNMjAxMDIyMTcyMzA1WhcNNDUxMDIy\nMTcyMzA1WjB7MRQwEgYDVQQLDAtFbmdpbmVlcmluZzELMAkGA1UEBhMCVVMxFDAS\nBgNVBAcMC1NhbnRhIENsYXJhMQswCQYDVQQIDAJDQTEfMB0GA1UECgwWQWR2YW5j\nZWQgTWljcm8gRGV2aWNlczESMBAGA1UEAwwJQVJLLU1pbGFuMIICIjANBgkqhkiG\n9w0BAQEFAAOCAg8AMIICCgKCAgEA0Ld52RJOdeiJlqK2JdsVmD7FktuotWwX1fNg\nW41XY9Xz1HEhSUmhLz9Cu9DHRlvgJSNxbeYYsnJfvyjx1MfU0V5tkKiU1EesNFta\n1kTA0szNisdYc9isqk7mXT5+KfGRbfc4V/9zRIcE8jlHN61S1ju8X93+6dxDUrG2\nSzxqJ4BhqyYmUDruPXJSX4vUc01P7j98MpqOS95rORdGHeI52Naz5m2B+O+vjsC0\n60d37jY9LFeuOP4Meri8qgfi2S5kKqg/aF6aPtuAZQVR7u3KFYXP59XmJgtcog05\ngmI0T/OitLhuzVvpZcLph0odh/1IPXqx3+MnjD97A7fXpqGd/y8KxX7jksTEzAOg\nbKAeam3lm+3yKIcTYMlsRMXPcjNbIvmsBykD//xSniusuHBkgnlENEWx1UcbQQrs\n+gVDkuVPhsnzIRNgYvM48Y+7LGiJYnrmE8xcrexekBxrva2V9TJQqnN3Q53kt5vi\nQi3+gCfmkwC0F0tirIZbLkXPrPwzZ0M9eNxhIySb2npJfgnqz55I0u33wh4r0ZNQ\neTGfw03MBUtyuzGesGkcw+loqMaq1qR4tjGbPYxCvpCq7+OgpCCoMNit2uLo9M18\nfHz10lOMT8nWAUvRZFzteXCm+7PHdYPlmQwUw3LvenJ/ILXoQPHfbkH0CyPfhl1j\nWhJFZasCAwEAAaN+MHwwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBSFrBrRQ/fI\nrFXUxR1BSKvVeErUUzAPBgNVHRMBAf8EBTADAQH/MDoGA1UdHwQzMDEwL6AtoCuG\nKWh0dHBzOi8va2RzaW50Zi5hbWQuY29tL3ZjZWsvdjEvTWlsYW4vY3JsMEYGCSqG\nSIb3DQEBCjA5oA8wDQYJYIZIAWUDBAICBQChHDAaBgkqhkiG9w0BAQgwDQYJYIZI\nAWUDBAICBQCiAwIBMKMDAgEBA4ICAQC6m0kDp6zv4Ojfgy+zleehsx6ol0ocgVel\nETobpx+EuCsqVFRPK1jZ1sp/lyd9+0fQ0r66n7kagRk4Ca39g66WGTJMeJdqYriw\nSTjjDCKVPSesWXYPVAyDhmP5n2v+BYipZWhpvqpaiO+EGK5IBP+578QeW/sSokrK\ndHaLAxG2LhZxj9aF73fqC7OAJZ5aPonw4RE299FVarh1Tx2eT3wSgkDgutCTB1Yq\nzT5DuwvAe+co2CIVIzMDamYuSFjPN0BCgojl7V+bTou7dMsqIu/TW/rPCX9/EUcp\nKGKqPQ3P+N9r1hjEFY1plBg93t53OOo49GNI+V1zvXPLI6xIFVsh+mto2RtgEX/e\npmMKTNN6psW88qg7c1hTWtN6MbRuQ0vm+O+/2tKBF2h8THb94OvvHHoFDpbCELlq\nHnIYhxy0YKXGyaW1NjfULxrrmxVW4wcn5E8GddmvNa6yYm8scJagEi13mhGu4Jqh\n3QU3sf8iUSUr09xQDwHtOQUVIqx4maBZPBtSMf+qUDtjXSSq8lfWcd8bLr9mdsUn\nJZJ0+tuPMKmBnSH860llKk+VpVQsgqbzDIvOLvD6W1Umq25boxCYJ+TuBoa4s+HH\nCViAvgT9kf/rBq1d+ivj6skkHxuzcxbk1xv6ZGxrteJxVH7KlX7YRdZ6eARKwLe4\nAFZEAwoKCQ==\n-----END CERTIFICATE-----\n`),
+// WithOpenStackProviderDefaults fills the default values for the specific OpenStack provider.
+// If the provider is not supported or not an OpenStack provider, the config is returned unchanged.
+func (c *Config) WithOpenStackProviderDefaults(csp cloudprovider.Provider, openStackProvider string) *Config {
+	if csp != cloudprovider.OpenStack {
+		return c
 	}
+	c.Attestation.QEMUVTPM = &QEMUVTPM{Measurements: measurements.DefaultsFor(cloudprovider.OpenStack, variant.QEMUVTPM{})}
+	switch openStackProvider {
+	case "stackit":
+		c.Provider.OpenStack.Cloud = "stackit"
+		c.Provider.OpenStack.FloatingIPPoolID = "970ace5c-458f-484a-a660-0903bcfd91ad"
+		c.Provider.OpenStack.RegionName = "RegionOne"
+		c.Provider.OpenStack.DeployYawolLoadBalancer = toPtr(true)
+		c.Provider.OpenStack.YawolImageID = "bcd6c13e-75d1-4c3f-bf0f-8f83580cc1be"
+		c.Provider.OpenStack.YawolFlavorID = "3b11b27e-6c73-470d-b595-1d85b95a8cdf"
+		c.Provider.OpenStack.DeployCSIDriver = toPtr(true)
+		for groupName, group := range c.NodeGroups {
+			group.InstanceType = "m1a.4cd"
+			group.StateDiskType = "storage_premium_perf6"
+			c.NodeGroups[groupName] = group
+		}
+		return c
+	}
+	return c
 }
 
-// GetVariant returns azure-sev-snp as the variant.
-func (AzureSEVSNP) GetVariant() variant.Variant {
-	return variant.AzureSEVSNP{}
-}
+// SetCSPNodeGroupDefaults sets the default values for the node groups based on the configured CSP.
+func (c *Config) SetCSPNodeGroupDefaults(csp cloudprovider.Provider) {
+	var instanceType, stateDiskType, zone string
+	switch csp {
+	case cloudprovider.AWS:
+		instanceType = "m6a.xlarge"
+		stateDiskType = "gp3"
+		zone = c.Provider.AWS.Zone
+	case cloudprovider.Azure:
+		// Check attestation variant, and use different default instance type if we have TDX
+		if c.GetAttestationConfig().GetVariant().Equal(variant.AzureTDX{}) {
+			instanceType = "Standard_DC4es_v5"
+		} else {
+			instanceType = "Standard_DC4as_v5"
+		}
+		stateDiskType = "Premium_LRS"
+	case cloudprovider.GCP:
+		instanceType = "n2d-standard-4"
+		stateDiskType = "pd-ssd"
+		zone = c.Provider.GCP.Zone
+	case cloudprovider.QEMU, cloudprovider.OpenStack:
+		// empty. There are no defaults for this CSP
+	}
 
-// GetMeasurements returns the measurements used for attestation.
-func (c AzureSEVSNP) GetMeasurements() measurements.M {
-	return c.Measurements
+	for groupName, group := range c.NodeGroups {
+		if len(group.InstanceType) == 0 && len(instanceType) != 0 {
+			group.InstanceType = instanceType
+		}
+		if len(group.StateDiskType) == 0 && len(stateDiskType) != 0 {
+			group.StateDiskType = stateDiskType
+		}
+		if len(group.Zone) == 0 && len(zone) != 0 {
+			group.Zone = zone
+		}
+		c.NodeGroups[groupName] = group
+	}
 }
 
 // SNPFirmwareSignerConfig is the configuration for validating the firmware signer.
@@ -737,45 +970,48 @@ type SNPFirmwareSignerConfig struct {
 	MAAURL string `json:"maaURL,omitempty" yaml:"maaURL,omitempty" validate:"len=0"`
 }
 
-// AzureTrustedLaunch is the configuration for Azure Trusted Launch attestation.
-type AzureTrustedLaunch struct {
-	// description: |
-	//   Expected TPM measurements.
-	Measurements measurements.M `json:"measurements" yaml:"measurements"`
-}
-
-// GetVariant returns azure-trusted-launch as the variant.
-func (AzureTrustedLaunch) GetVariant() variant.Variant {
-	return variant.AzureTrustedLaunch{}
-}
-
-// GetMeasurements returns the measurements used for attestation.
-func (c AzureTrustedLaunch) GetMeasurements() measurements.M {
-	return c.Measurements
+// EqualTo returns true if the config is equal to the given config.
+func (c SNPFirmwareSignerConfig) EqualTo(other SNPFirmwareSignerConfig) bool {
+	return c.AcceptedKeyDigests.EqualTo(other.AcceptedKeyDigests) && c.EnforcementPolicy == other.EnforcementPolicy && c.MAAURL == other.MAAURL
 }
 
 // GCPSEVES is the configuration for GCP SEV-ES attestation.
 type GCPSEVES struct {
 	// description: |
 	//   Expected TPM measurements.
-	Measurements measurements.M `json:"measurements" yaml:"measurements"`
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
 }
 
-// GetVariant returns gcp-sev-es as the variant.
-func (GCPSEVES) GetVariant() variant.Variant {
-	return variant.GCPSEVES{}
-}
-
-// GetMeasurements returns the measurements used for attestation.
-func (c GCPSEVES) GetMeasurements() measurements.M {
-	return c.Measurements
+// GCPSEVSNP is the configuration for GCP SEV-SNP attestation.
+type GCPSEVSNP struct {
+	// description: |
+	//   Expected TPM measurements.
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
+	// description: |
+	//   Lowest acceptable bootloader version.
+	BootloaderVersion AttestationVersion `json:"bootloaderVersion" yaml:"bootloaderVersion"`
+	// description: |
+	//   Lowest acceptable TEE version.
+	TEEVersion AttestationVersion `json:"teeVersion" yaml:"teeVersion"`
+	// description: |
+	//   Lowest acceptable SEV-SNP version.
+	SNPVersion AttestationVersion `json:"snpVersion" yaml:"snpVersion"`
+	// description: |
+	//   Lowest acceptable microcode version.
+	MicrocodeVersion AttestationVersion `json:"microcodeVersion" yaml:"microcodeVersion"`
+	// description: |
+	//   AMD Root Key certificate used to verify the SEV-SNP certificate chain.
+	AMDRootKey Certificate `json:"amdRootKey" yaml:"amdRootKey"`
+	// description: |
+	//   AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate.
+	AMDSigningKey Certificate `json:"amdSigningKey,omitempty" yaml:"amdSigningKey,omitempty"`
 }
 
 // QEMUVTPM is the configuration for QEMU vTPM attestation.
 type QEMUVTPM struct {
 	// description: |
 	//   Expected TPM measurements.
-	Measurements measurements.M `json:"measurements" yaml:"measurements"`
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
 }
 
 // GetVariant returns qemu-vtpm as the variant.
@@ -788,6 +1024,152 @@ func (c QEMUVTPM) GetMeasurements() measurements.M {
 	return c.Measurements
 }
 
+// SetMeasurements updates a config's measurements using the given measurements.
+func (c *QEMUVTPM) SetMeasurements(m measurements.M) {
+	c.Measurements = m
+}
+
+// EqualTo returns true if the config is equal to the given config.
+func (c QEMUVTPM) EqualTo(other AttestationCfg) (bool, error) {
+	otherCfg, ok := other.(*QEMUVTPM)
+	if !ok {
+		return false, fmt.Errorf("cannot compare %T with %T", c, other)
+	}
+	return c.Measurements.EqualTo(otherCfg.Measurements), nil
+}
+
+// QEMUTDX is the configuration for QEMU TDX attestation.
+type QEMUTDX struct {
+	// description: |
+	//   Expected TDX measurements.
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
+}
+
+// GetVariant returns qemu-tdx as the variant.
+func (QEMUTDX) GetVariant() variant.Variant {
+	return variant.QEMUTDX{}
+}
+
+// GetMeasurements returns the measurements used for attestation.
+func (c QEMUTDX) GetMeasurements() measurements.M {
+	return c.Measurements
+}
+
+// SetMeasurements updates a config's measurements using the given measurements.
+func (c *QEMUTDX) SetMeasurements(m measurements.M) {
+	c.Measurements = m
+}
+
+// EqualTo returns true if the config is equal to the given config.
+func (c QEMUTDX) EqualTo(other AttestationCfg) (bool, error) {
+	otherCfg, ok := other.(*QEMUTDX)
+	if !ok {
+		return false, fmt.Errorf("cannot compare %T with %T", c, other)
+	}
+	return c.Measurements.EqualTo(otherCfg.Measurements), nil
+}
+
+// AWSSEVSNP is the configuration for AWS SEV-SNP attestation.
+type AWSSEVSNP struct {
+	// description: |
+	//   Expected TPM measurements.
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
+	// description: |
+	//   Lowest acceptable bootloader version.
+	BootloaderVersion AttestationVersion `json:"bootloaderVersion" yaml:"bootloaderVersion"`
+	// description: |
+	//   Lowest acceptable TEE version.
+	TEEVersion AttestationVersion `json:"teeVersion" yaml:"teeVersion"`
+	// description: |
+	//   Lowest acceptable SEV-SNP version.
+	SNPVersion AttestationVersion `json:"snpVersion" yaml:"snpVersion"`
+	// description: |
+	//   Lowest acceptable microcode version.
+	MicrocodeVersion AttestationVersion `json:"microcodeVersion" yaml:"microcodeVersion"`
+	// description: |
+	//   AMD Root Key certificate used to verify the SEV-SNP certificate chain.
+	AMDRootKey Certificate `json:"amdRootKey" yaml:"amdRootKey"`
+	// description: |
+	//   AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate.
+	AMDSigningKey Certificate `json:"amdSigningKey,omitempty" yaml:"amdSigningKey,omitempty"`
+}
+
+// AWSNitroTPM is the configuration for AWS Nitro TPM attestation.
+type AWSNitroTPM struct {
+	// description: |
+	//   Expected TPM measurements.
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
+}
+
+// AzureSEVSNP is the configuration for Azure SEV-SNP attestation.
+type AzureSEVSNP struct {
+	// description: |
+	//   Expected TPM measurements.
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
+	// description: |
+	//   Lowest acceptable bootloader version.
+	BootloaderVersion AttestationVersion `json:"bootloaderVersion" yaml:"bootloaderVersion"`
+	// description: |
+	//   Lowest acceptable TEE version.
+	TEEVersion AttestationVersion `json:"teeVersion" yaml:"teeVersion"`
+	// description: |
+	//   Lowest acceptable SEV-SNP version.
+	SNPVersion AttestationVersion `json:"snpVersion" yaml:"snpVersion"`
+	// description: |
+	//   Lowest acceptable microcode version.
+	MicrocodeVersion AttestationVersion `json:"microcodeVersion" yaml:"microcodeVersion"`
+	// description: |
+	//   Configuration for validating the firmware signature.
+	FirmwareSignerConfig SNPFirmwareSignerConfig `json:"firmwareSignerConfig" yaml:"firmwareSignerConfig"`
+	// description: |
+	//   AMD Root Key certificate used to verify the SEV-SNP certificate chain.
+	AMDRootKey Certificate `json:"amdRootKey" yaml:"amdRootKey"`
+	// description: |
+	//   AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate.
+	AMDSigningKey Certificate `json:"amdSigningKey,omitempty" yaml:"amdSigningKey,omitempty" validate:"len=0"`
+}
+
+// AzureTrustedLaunch is the configuration for Azure Trusted Launch attestation.
+type AzureTrustedLaunch struct {
+	// description: |
+	//   Expected TPM measurements.
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
+}
+
+// AzureTDX is the configuration for Azure TDX attestation.
+type AzureTDX struct {
+	// description: |
+	//   Expected TPM measurements.
+	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
+	// description: |
+	//   Minimum required QE security version number (SVN).
+	QESVN uint16 `json:"qeSVN" yaml:"qeSVN"`
+	// description: |
+	//   Minimum required PCE security version number (SVN).
+	PCESVN uint16 `json:"pceSVN" yaml:"pceSVN"`
+	// description: |
+	//   Component-wise minimum required 16 byte hex-encoded TEE_TCB security version number (SVN).
+	TEETCBSVN encoding.HexBytes `json:"teeTCBSVN" yaml:"teeTCBSVN"`
+	// description: |
+	//   Expected 16 byte hex-encoded QE_VENDOR_ID field.
+	QEVendorID encoding.HexBytes `json:"qeVendorID" yaml:"qeVendorID"`
+	// description: |
+	//   Expected 48 byte hex-encoded MR_SEAM value.
+	MRSeam encoding.HexBytes `json:"mrSeam" yaml:"mrSeam"`
+	// description: |
+	//   Expected 8 byte hex-encoded XFAM field.
+	XFAM encoding.HexBytes `json:"xfam" yaml:"xfam"`
+	// description: |
+	//   Intel Root Key certificate used to verify the TDX certificate chain.
+	IntelRootKey Certificate `json:"intelRootKey" yaml:"intelRootKey"`
+}
+
 func toPtr[T any](v T) *T {
 	return &v
+}
+
+// svnResolveMarshaller is used to marshall "latest" security version numbers with resolved versions.
+type svnResolveMarshaller interface {
+	// getToMarshallLatestWithResolvedVersions brings the attestation config into a state where marshalling uses the numerical version numbers for "latest" versions.
+	getToMarshallLatestWithResolvedVersions() AttestationCfg
 }

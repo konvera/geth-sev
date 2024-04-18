@@ -15,10 +15,11 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/konvera/geth-sev/constellation/attestation"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/attestation/vtpm"
-	"github.com/konvera/geth-sev/constellation/variant"
 	tpmclient "github.com/google/go-tpm-tools/client"
-	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/legacy/tpm2"
 )
 
 const (
@@ -34,7 +35,7 @@ type Issuer struct {
 }
 
 // NewIssuer initializes a new Azure Issuer.
-func NewIssuer(log vtpm.AttestationLogger) *Issuer {
+func NewIssuer(log attestation.Logger) *Issuer {
 	i := &Issuer{
 		hClient: &http.Client{},
 	}
@@ -108,7 +109,7 @@ func (i *Issuer) getAttestationCert(ctx context.Context, tpm io.ReadWriteCloser,
 
 // getAttestationKey reads the Azure trusted launch attesation key.
 func getAttestationKey(tpm io.ReadWriter) (*tpmclient.Key, error) {
-	ak, err := tpmclient.LoadCachedKey(tpm, tpmAkIdx)
+	ak, err := tpmclient.LoadCachedKey(tpm, tpmAkIdx, tpmclient.NullSession{})
 	if err != nil {
 		return nil, fmt.Errorf("reading attestation key from TPM: %w", err)
 	}

@@ -11,26 +11,33 @@ import (
 )
 
 var (
-	ConfigDoc                  encoder.Doc
-	ProviderConfigDoc          encoder.Doc
-	AWSConfigDoc               encoder.Doc
-	AzureConfigDoc             encoder.Doc
-	GCPConfigDoc               encoder.Doc
-	OpenStackConfigDoc         encoder.Doc
-	QEMUConfigDoc              encoder.Doc
-	AWSNitroTPMDoc             encoder.Doc
-	AzureSEVSNPDoc             encoder.Doc
-	SNPFirmwareSignerConfigDoc encoder.Doc
-	AzureTrustedLaunchDoc      encoder.Doc
-	GCPSEVESDoc                encoder.Doc
-	QEMUVTPMDoc                encoder.Doc
+	ConfigDoc                          encoder.Doc
+	ProviderConfigDoc                  encoder.Doc
+	AWSConfigDoc                       encoder.Doc
+	AzureConfigDoc                     encoder.Doc
+	GCPConfigDoc                       encoder.Doc
+	OpenStackConfigDoc                 encoder.Doc
+	QEMUConfigDoc                      encoder.Doc
+	AttestationConfigDoc               encoder.Doc
+	NodeGroupDoc                       encoder.Doc
+	UnsupportedAppRegistrationErrorDoc encoder.Doc
+	SNPFirmwareSignerConfigDoc         encoder.Doc
+	GCPSEVESDoc                        encoder.Doc
+	GCPSEVSNPDoc                       encoder.Doc
+	QEMUVTPMDoc                        encoder.Doc
+	QEMUTDXDoc                         encoder.Doc
+	AWSSEVSNPDoc                       encoder.Doc
+	AWSNitroTPMDoc                     encoder.Doc
+	AzureSEVSNPDoc                     encoder.Doc
+	AzureTrustedLaunchDoc              encoder.Doc
+	AzureTDXDoc                        encoder.Doc
 )
 
 func init() {
 	ConfigDoc.Type = "Config"
 	ConfigDoc.Comments[encoder.LineComment] = "Config defines configuration used by CLI."
 	ConfigDoc.Description = "Config defines configuration used by CLI."
-	ConfigDoc.Fields = make([]encoder.Doc, 9)
+	ConfigDoc.Fields = make([]encoder.Doc, 12)
 	ConfigDoc.Fields[0].Name = "version"
 	ConfigDoc.Fields[0].Type = "string"
 	ConfigDoc.Fields[0].Note = ""
@@ -46,36 +53,51 @@ func init() {
 	ConfigDoc.Fields[2].Note = ""
 	ConfigDoc.Fields[2].Description = "Name of the cluster."
 	ConfigDoc.Fields[2].Comments[encoder.LineComment] = "Name of the cluster."
-	ConfigDoc.Fields[3].Name = "stateDiskSizeGB"
-	ConfigDoc.Fields[3].Type = "int"
+	ConfigDoc.Fields[3].Name = "kubernetesVersion"
+	ConfigDoc.Fields[3].Type = "ValidK8sVersion"
 	ConfigDoc.Fields[3].Note = ""
-	ConfigDoc.Fields[3].Description = "Size (in GB) of a node's disk to store the non-volatile state."
-	ConfigDoc.Fields[3].Comments[encoder.LineComment] = "Size (in GB) of a node's disk to store the non-volatile state."
-	ConfigDoc.Fields[4].Name = "kubernetesVersion"
-	ConfigDoc.Fields[4].Type = "string"
+	ConfigDoc.Fields[3].Description = "Kubernetes version to be installed into the cluster."
+	ConfigDoc.Fields[3].Comments[encoder.LineComment] = "Kubernetes version to be installed into the cluster."
+	ConfigDoc.Fields[4].Name = "microserviceVersion"
+	ConfigDoc.Fields[4].Type = "Semver"
 	ConfigDoc.Fields[4].Note = ""
-	ConfigDoc.Fields[4].Description = "Kubernetes version to be installed into the cluster."
-	ConfigDoc.Fields[4].Comments[encoder.LineComment] = "Kubernetes version to be installed into the cluster."
-	ConfigDoc.Fields[5].Name = "microserviceVersion"
-	ConfigDoc.Fields[5].Type = "string"
+	ConfigDoc.Fields[4].Description = "Microservice version to be installed into the cluster. Defaults to the version of the CLI."
+	ConfigDoc.Fields[4].Comments[encoder.LineComment] = "Microservice version to be installed into the cluster. Defaults to the version of the CLI."
+	ConfigDoc.Fields[5].Name = "debugCluster"
+	ConfigDoc.Fields[5].Type = "bool"
 	ConfigDoc.Fields[5].Note = ""
-	ConfigDoc.Fields[5].Description = "Microservice version to be installed into the cluster. Defaults to the version of the CLI."
-	ConfigDoc.Fields[5].Comments[encoder.LineComment] = "Microservice version to be installed into the cluster. Defaults to the version of the CLI."
-	ConfigDoc.Fields[6].Name = "debugCluster"
-	ConfigDoc.Fields[6].Type = "bool"
+	ConfigDoc.Fields[5].Description = "DON'T USE IN PRODUCTION: enable debug mode and use debug images."
+	ConfigDoc.Fields[5].Comments[encoder.LineComment] = "DON'T USE IN PRODUCTION: enable debug mode and use debug images."
+	ConfigDoc.Fields[6].Name = "customEndpoint"
+	ConfigDoc.Fields[6].Type = "string"
 	ConfigDoc.Fields[6].Note = ""
-	ConfigDoc.Fields[6].Description = "DON'T USE IN PRODUCTION: enable debug mode and use debug images. For usage, see: https://github.com/edgelesssys/constellation/blob/main/debugd/README.md"
-	ConfigDoc.Fields[6].Comments[encoder.LineComment] = "DON'T USE IN PRODUCTION: enable debug mode and use debug images. For usage, see: https://github.com/edgelesssys/constellation/blob/main/debugd/README.md"
-	ConfigDoc.Fields[7].Name = "attestationVariant"
-	ConfigDoc.Fields[7].Type = "string"
-	ConfigDoc.Fields[7].Note = "TODO: v2.8: Mark required\n"
-	ConfigDoc.Fields[7].Description = "Attestation variant used to verify the integrity of a node."
-	ConfigDoc.Fields[7].Comments[encoder.LineComment] = "Attestation variant used to verify the integrity of a node."
-	ConfigDoc.Fields[8].Name = "provider"
-	ConfigDoc.Fields[8].Type = "ProviderConfig"
+	ConfigDoc.Fields[6].Description = "Optional custom endpoint (DNS name) for the Constellation API server.\nThis can be used to point a custom dns name at the Constellation API server\nand is added to the Subject Alternative Name (SAN) field of the TLS certificate used by the API server.\nA fallback to DNS name is always available."
+	ConfigDoc.Fields[6].Comments[encoder.LineComment] = "Optional custom endpoint (DNS name) for the Constellation API server."
+	ConfigDoc.Fields[7].Name = "internalLoadBalancer"
+	ConfigDoc.Fields[7].Type = "bool"
+	ConfigDoc.Fields[7].Note = ""
+	ConfigDoc.Fields[7].Description = "Flag to enable/disable the internal load balancer. If enabled, the Constellation is only accessible from within the VPC."
+	ConfigDoc.Fields[7].Comments[encoder.LineComment] = "Flag to enable/disable the internal load balancer. If enabled, the Constellation is only accessible from within the VPC."
+	ConfigDoc.Fields[8].Name = "serviceCIDR"
+	ConfigDoc.Fields[8].Type = "string"
 	ConfigDoc.Fields[8].Note = ""
-	ConfigDoc.Fields[8].Description = "Supported cloud providers and their specific configurations."
-	ConfigDoc.Fields[8].Comments[encoder.LineComment] = "Supported cloud providers and their specific configurations."
+	ConfigDoc.Fields[8].Description = "The Kubernetes Service CIDR to be used for the cluster. This value will only be used during the first initialization of the Constellation."
+	ConfigDoc.Fields[8].Comments[encoder.LineComment] = "The Kubernetes Service CIDR to be used for the cluster. This value will only be used during the first initialization of the Constellation."
+	ConfigDoc.Fields[9].Name = "provider"
+	ConfigDoc.Fields[9].Type = "ProviderConfig"
+	ConfigDoc.Fields[9].Note = ""
+	ConfigDoc.Fields[9].Description = "Supported cloud providers and their specific configurations."
+	ConfigDoc.Fields[9].Comments[encoder.LineComment] = "Supported cloud providers and their specific configurations."
+	ConfigDoc.Fields[10].Name = "nodeGroups"
+	ConfigDoc.Fields[10].Type = "map[string]NodeGroup"
+	ConfigDoc.Fields[10].Note = ""
+	ConfigDoc.Fields[10].Description = "Node groups to be created in the cluster."
+	ConfigDoc.Fields[10].Comments[encoder.LineComment] = "Node groups to be created in the cluster."
+	ConfigDoc.Fields[11].Name = "attestation"
+	ConfigDoc.Fields[11].Type = "AttestationConfig"
+	ConfigDoc.Fields[11].Note = ""
+	ConfigDoc.Fields[11].Description = "Configuration for attestation validation. This configuration provides sensible defaults for the Constellation version it was created for.\nSee the docs for an overview on attestation: https://docs.edgeless.systems/constellation/architecture/attestation"
+	ConfigDoc.Fields[11].Comments[encoder.LineComment] = "Configuration for attestation validation. This configuration provides sensible defaults for the Constellation version it was created for.\nSee the docs for an overview on attestation: https://docs.edgeless.systems/constellation/architecture/attestation"
 
 	ProviderConfigDoc.Type = "ProviderConfig"
 	ProviderConfigDoc.Comments[encoder.LineComment] = "ProviderConfig are cloud-provider specific configuration values used by the CLI."
@@ -122,7 +144,7 @@ func init() {
 			FieldName: "aws",
 		},
 	}
-	AWSConfigDoc.Fields = make([]encoder.Doc, 7)
+	AWSConfigDoc.Fields = make([]encoder.Doc, 6)
 	AWSConfigDoc.Fields[0].Name = "region"
 	AWSConfigDoc.Fields[0].Type = "string"
 	AWSConfigDoc.Fields[0].Note = ""
@@ -133,31 +155,26 @@ func init() {
 	AWSConfigDoc.Fields[1].Note = ""
 	AWSConfigDoc.Fields[1].Description = "AWS data center zone name in defined region. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html#concepts-availability-zones"
 	AWSConfigDoc.Fields[1].Comments[encoder.LineComment] = "AWS data center zone name in defined region. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html#concepts-availability-zones"
-	AWSConfigDoc.Fields[2].Name = "instanceType"
+	AWSConfigDoc.Fields[2].Name = "iamProfileControlPlane"
 	AWSConfigDoc.Fields[2].Type = "string"
 	AWSConfigDoc.Fields[2].Note = ""
-	AWSConfigDoc.Fields[2].Description = "VM instance type to use for Constellation nodes. Needs to support NitroTPM. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enable-nitrotpm-prerequisites.html"
-	AWSConfigDoc.Fields[2].Comments[encoder.LineComment] = "VM instance type to use for Constellation nodes. Needs to support NitroTPM. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enable-nitrotpm-prerequisites.html"
-	AWSConfigDoc.Fields[3].Name = "stateDiskType"
+	AWSConfigDoc.Fields[2].Description = "Name of the IAM profile to use for the control-plane nodes."
+	AWSConfigDoc.Fields[2].Comments[encoder.LineComment] = "Name of the IAM profile to use for the control-plane nodes."
+	AWSConfigDoc.Fields[3].Name = "iamProfileWorkerNodes"
 	AWSConfigDoc.Fields[3].Type = "string"
 	AWSConfigDoc.Fields[3].Note = ""
-	AWSConfigDoc.Fields[3].Description = "Type of a node's state disk. The type influences boot time and I/O performance. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-volume-types.html"
-	AWSConfigDoc.Fields[3].Comments[encoder.LineComment] = "Type of a node's state disk. The type influences boot time and I/O performance. See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-volume-types.html"
-	AWSConfigDoc.Fields[4].Name = "iamProfileControlPlane"
-	AWSConfigDoc.Fields[4].Type = "string"
+	AWSConfigDoc.Fields[3].Description = "Name of the IAM profile to use for the worker nodes."
+	AWSConfigDoc.Fields[3].Comments[encoder.LineComment] = "Name of the IAM profile to use for the worker nodes."
+	AWSConfigDoc.Fields[4].Name = "deployCSIDriver"
+	AWSConfigDoc.Fields[4].Type = "bool"
 	AWSConfigDoc.Fields[4].Note = ""
-	AWSConfigDoc.Fields[4].Description = "Name of the IAM profile to use for the control plane nodes."
-	AWSConfigDoc.Fields[4].Comments[encoder.LineComment] = "Name of the IAM profile to use for the control plane nodes."
-	AWSConfigDoc.Fields[5].Name = "iamProfileWorkerNodes"
-	AWSConfigDoc.Fields[5].Type = "string"
+	AWSConfigDoc.Fields[4].Description = "Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
+	AWSConfigDoc.Fields[4].Comments[encoder.LineComment] = "Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
+	AWSConfigDoc.Fields[5].Name = "useMarketplaceImage"
+	AWSConfigDoc.Fields[5].Type = "bool"
 	AWSConfigDoc.Fields[5].Note = ""
-	AWSConfigDoc.Fields[5].Description = "Name of the IAM profile to use for the worker nodes."
-	AWSConfigDoc.Fields[5].Comments[encoder.LineComment] = "Name of the IAM profile to use for the worker nodes."
-	AWSConfigDoc.Fields[6].Name = "measurements"
-	AWSConfigDoc.Fields[6].Type = "Measurements"
-	AWSConfigDoc.Fields[6].Note = ""
-	AWSConfigDoc.Fields[6].Description = "Expected VM measurements."
-	AWSConfigDoc.Fields[6].Comments[encoder.LineComment] = "Expected VM measurements."
+	AWSConfigDoc.Fields[5].Description = "Use the specified AWS Marketplace image offering."
+	AWSConfigDoc.Fields[5].Comments[encoder.LineComment] = "Use the specified AWS Marketplace image offering."
 
 	AzureConfigDoc.Type = "AzureConfig"
 	AzureConfigDoc.Comments[encoder.LineComment] = "AzureConfig are Azure specific configuration values used by the CLI."
@@ -168,7 +185,7 @@ func init() {
 			FieldName: "azure",
 		},
 	}
-	AzureConfigDoc.Fields = make([]encoder.Doc, 15)
+	AzureConfigDoc.Fields = make([]encoder.Doc, 8)
 	AzureConfigDoc.Fields[0].Name = "subscription"
 	AzureConfigDoc.Fields[0].Type = "string"
 	AzureConfigDoc.Fields[0].Note = ""
@@ -194,56 +211,21 @@ func init() {
 	AzureConfigDoc.Fields[4].Note = ""
 	AzureConfigDoc.Fields[4].Description = "Authorize spawned VMs to access Azure API."
 	AzureConfigDoc.Fields[4].Comments[encoder.LineComment] = "Authorize spawned VMs to access Azure API."
-	AzureConfigDoc.Fields[5].Name = "appClientID"
-	AzureConfigDoc.Fields[5].Type = "string"
+	AzureConfigDoc.Fields[5].Name = "deployCSIDriver"
+	AzureConfigDoc.Fields[5].Type = "bool"
 	AzureConfigDoc.Fields[5].Note = ""
-	AzureConfigDoc.Fields[5].Description = "Application client ID of the Active Directory app registration."
-	AzureConfigDoc.Fields[5].Comments[encoder.LineComment] = "Application client ID of the Active Directory app registration."
-	AzureConfigDoc.Fields[6].Name = "clientSecretValue"
-	AzureConfigDoc.Fields[6].Type = "string"
+	AzureConfigDoc.Fields[5].Description = "Deploy Azure Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
+	AzureConfigDoc.Fields[5].Comments[encoder.LineComment] = "Deploy Azure Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
+	AzureConfigDoc.Fields[6].Name = "secureBoot"
+	AzureConfigDoc.Fields[6].Type = "bool"
 	AzureConfigDoc.Fields[6].Note = ""
-	AzureConfigDoc.Fields[6].Description = "Client secret value of the Active Directory app registration credentials. Alternatively leave empty and pass value via CONSTELL_AZURE_CLIENT_SECRET_VALUE environment variable."
-	AzureConfigDoc.Fields[6].Comments[encoder.LineComment] = "Client secret value of the Active Directory app registration credentials. Alternatively leave empty and pass value via CONSTELL_AZURE_CLIENT_SECRET_VALUE environment variable."
-	AzureConfigDoc.Fields[7].Name = "instanceType"
-	AzureConfigDoc.Fields[7].Type = "string"
+	AzureConfigDoc.Fields[6].Description = "Enable secure boot for VMs. If enabled, the OS image has to include a virtual machine guest state (VMGS) blob."
+	AzureConfigDoc.Fields[6].Comments[encoder.LineComment] = "Enable secure boot for VMs. If enabled, the OS image has to include a virtual machine guest state (VMGS) blob."
+	AzureConfigDoc.Fields[7].Name = "useMarketplaceImage"
+	AzureConfigDoc.Fields[7].Type = "bool"
 	AzureConfigDoc.Fields[7].Note = ""
-	AzureConfigDoc.Fields[7].Description = "VM instance type to use for Constellation nodes."
-	AzureConfigDoc.Fields[7].Comments[encoder.LineComment] = "VM instance type to use for Constellation nodes."
-	AzureConfigDoc.Fields[8].Name = "stateDiskType"
-	AzureConfigDoc.Fields[8].Type = "string"
-	AzureConfigDoc.Fields[8].Note = ""
-	AzureConfigDoc.Fields[8].Description = "Type of a node's state disk. The type influences boot time and I/O performance. See: https://docs.microsoft.com/en-us/azure/virtual-machines/disks-types#disk-type-comparison"
-	AzureConfigDoc.Fields[8].Comments[encoder.LineComment] = "Type of a node's state disk. The type influences boot time and I/O performance. See: https://docs.microsoft.com/en-us/azure/virtual-machines/disks-types#disk-type-comparison"
-	AzureConfigDoc.Fields[9].Name = "deployCSIDriver"
-	AzureConfigDoc.Fields[9].Type = "bool"
-	AzureConfigDoc.Fields[9].Note = ""
-	AzureConfigDoc.Fields[9].Description = "Deploy Azure Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
-	AzureConfigDoc.Fields[9].Comments[encoder.LineComment] = "Deploy Azure Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
-	AzureConfigDoc.Fields[10].Name = "confidentialVM"
-	AzureConfigDoc.Fields[10].Type = "bool"
-	AzureConfigDoc.Fields[10].Note = "TODO: v2.8 remove\n"
-	AzureConfigDoc.Fields[10].Description = "Use Confidential VMs. Always needs to be true."
-	AzureConfigDoc.Fields[10].Comments[encoder.LineComment] = "Use Confidential VMs. Always needs to be true."
-	AzureConfigDoc.Fields[11].Name = "secureBoot"
-	AzureConfigDoc.Fields[11].Type = "bool"
-	AzureConfigDoc.Fields[11].Note = ""
-	AzureConfigDoc.Fields[11].Description = "Enable secure boot for VMs. If enabled, the OS image has to include a virtual machine guest state (VMGS) blob."
-	AzureConfigDoc.Fields[11].Comments[encoder.LineComment] = "Enable secure boot for VMs. If enabled, the OS image has to include a virtual machine guest state (VMGS) blob."
-	AzureConfigDoc.Fields[12].Name = "idKeyDigest"
-	AzureConfigDoc.Fields[12].Type = "Digests"
-	AzureConfigDoc.Fields[12].Note = ""
-	AzureConfigDoc.Fields[12].Description = "List of accepted values for the field 'idkeydigest' in the AMD SEV-SNP attestation report. Only usable with ConfidentialVMs. See 4.6 and 7.3 in: https://www.amd.com/system/files/TechDocs/56860.pdf"
-	AzureConfigDoc.Fields[12].Comments[encoder.LineComment] = "List of accepted values for the field 'idkeydigest' in the AMD SEV-SNP attestation report. Only usable with ConfidentialVMs. See 4.6 and 7.3 in: https://www.amd.com/system/files/TechDocs/56860.pdf"
-	AzureConfigDoc.Fields[13].Name = "enforceIdKeyDigest"
-	AzureConfigDoc.Fields[13].Type = "Enforcement"
-	AzureConfigDoc.Fields[13].Note = ""
-	AzureConfigDoc.Fields[13].Description = "Enforce the specified idKeyDigest value during remote attestation."
-	AzureConfigDoc.Fields[13].Comments[encoder.LineComment] = "Enforce the specified idKeyDigest value during remote attestation."
-	AzureConfigDoc.Fields[14].Name = "measurements"
-	AzureConfigDoc.Fields[14].Type = "Measurements"
-	AzureConfigDoc.Fields[14].Note = ""
-	AzureConfigDoc.Fields[14].Description = "Expected confidential VM measurements."
-	AzureConfigDoc.Fields[14].Comments[encoder.LineComment] = "Expected confidential VM measurements."
+	AzureConfigDoc.Fields[7].Description = "Use the specified Azure Marketplace image offering."
+	AzureConfigDoc.Fields[7].Comments[encoder.LineComment] = "Use the specified Azure Marketplace image offering."
 
 	GCPConfigDoc.Type = "GCPConfig"
 	GCPConfigDoc.Comments[encoder.LineComment] = "GCPConfig are GCP specific configuration values used by the CLI."
@@ -254,7 +236,7 @@ func init() {
 			FieldName: "gcp",
 		},
 	}
-	GCPConfigDoc.Fields = make([]encoder.Doc, 8)
+	GCPConfigDoc.Fields = make([]encoder.Doc, 6)
 	GCPConfigDoc.Fields[0].Name = "project"
 	GCPConfigDoc.Fields[0].Type = "string"
 	GCPConfigDoc.Fields[0].Note = ""
@@ -275,26 +257,16 @@ func init() {
 	GCPConfigDoc.Fields[3].Note = ""
 	GCPConfigDoc.Fields[3].Description = "Path of service account key file. For required service account roles, see https://docs.edgeless.systems/constellation/getting-started/install#authorization"
 	GCPConfigDoc.Fields[3].Comments[encoder.LineComment] = "Path of service account key file. For required service account roles, see https://docs.edgeless.systems/constellation/getting-started/install#authorization"
-	GCPConfigDoc.Fields[4].Name = "instanceType"
-	GCPConfigDoc.Fields[4].Type = "string"
+	GCPConfigDoc.Fields[4].Name = "deployCSIDriver"
+	GCPConfigDoc.Fields[4].Type = "bool"
 	GCPConfigDoc.Fields[4].Note = ""
-	GCPConfigDoc.Fields[4].Description = "VM instance type to use for Constellation nodes."
-	GCPConfigDoc.Fields[4].Comments[encoder.LineComment] = "VM instance type to use for Constellation nodes."
-	GCPConfigDoc.Fields[5].Name = "stateDiskType"
-	GCPConfigDoc.Fields[5].Type = "string"
+	GCPConfigDoc.Fields[4].Description = "Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
+	GCPConfigDoc.Fields[4].Comments[encoder.LineComment] = "Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
+	GCPConfigDoc.Fields[5].Name = "useMarketplaceImage"
+	GCPConfigDoc.Fields[5].Type = "bool"
 	GCPConfigDoc.Fields[5].Note = ""
-	GCPConfigDoc.Fields[5].Description = "Type of a node's state disk. The type influences boot time and I/O performance. See: https://cloud.google.com/compute/docs/disks#disk-types"
-	GCPConfigDoc.Fields[5].Comments[encoder.LineComment] = "Type of a node's state disk. The type influences boot time and I/O performance. See: https://cloud.google.com/compute/docs/disks#disk-types"
-	GCPConfigDoc.Fields[6].Name = "deployCSIDriver"
-	GCPConfigDoc.Fields[6].Type = "bool"
-	GCPConfigDoc.Fields[6].Note = ""
-	GCPConfigDoc.Fields[6].Description = "Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
-	GCPConfigDoc.Fields[6].Comments[encoder.LineComment] = "Deploy Persistent Disk CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
-	GCPConfigDoc.Fields[7].Name = "measurements"
-	GCPConfigDoc.Fields[7].Type = "Measurements"
-	GCPConfigDoc.Fields[7].Note = ""
-	GCPConfigDoc.Fields[7].Description = "Expected confidential VM measurements."
-	GCPConfigDoc.Fields[7].Comments[encoder.LineComment] = "Expected confidential VM measurements."
+	GCPConfigDoc.Fields[5].Description = "Use the specified GCP Marketplace image offering."
+	GCPConfigDoc.Fields[5].Comments[encoder.LineComment] = "Use the specified GCP Marketplace image offering."
 
 	OpenStackConfigDoc.Type = "OpenStackConfig"
 	OpenStackConfigDoc.Comments[encoder.LineComment] = "OpenStackConfig holds config information for OpenStack based Constellation deployments."
@@ -305,77 +277,57 @@ func init() {
 			FieldName: "openstack",
 		},
 	}
-	OpenStackConfigDoc.Fields = make([]encoder.Doc, 14)
+	OpenStackConfigDoc.Fields = make([]encoder.Doc, 10)
 	OpenStackConfigDoc.Fields[0].Name = "cloud"
 	OpenStackConfigDoc.Fields[0].Type = "string"
 	OpenStackConfigDoc.Fields[0].Note = ""
 	OpenStackConfigDoc.Fields[0].Description = "OpenStack cloud name to select from \"clouds.yaml\". Only required if config file for OpenStack is used. Fallback authentication uses environment variables. For details see: https://docs.openstack.org/openstacksdk/latest/user/config/configuration.html."
 	OpenStackConfigDoc.Fields[0].Comments[encoder.LineComment] = "OpenStack cloud name to select from \"clouds.yaml\". Only required if config file for OpenStack is used. Fallback authentication uses environment variables. For details see: https://docs.openstack.org/openstacksdk/latest/user/config/configuration.html."
-	OpenStackConfigDoc.Fields[1].Name = "availabilityZone"
+	OpenStackConfigDoc.Fields[1].Name = "cloudsYAMLPath"
 	OpenStackConfigDoc.Fields[1].Type = "string"
 	OpenStackConfigDoc.Fields[1].Note = ""
-	OpenStackConfigDoc.Fields[1].Description = "Availability zone to place the VMs in. For details see: https://docs.openstack.org/nova/latest/admin/availability-zones.html"
-	OpenStackConfigDoc.Fields[1].Comments[encoder.LineComment] = "Availability zone to place the VMs in. For details see: https://docs.openstack.org/nova/latest/admin/availability-zones.html"
-	OpenStackConfigDoc.Fields[2].Name = "flavorID"
+	OpenStackConfigDoc.Fields[1].Description = "Path to OpenStack \"clouds.yaml\" file. Only required if automatic detection fails."
+	OpenStackConfigDoc.Fields[1].Comments[encoder.LineComment] = "Path to OpenStack \"clouds.yaml\" file. Only required if automatic detection fails."
+	OpenStackConfigDoc.Fields[2].Name = "availabilityZone"
 	OpenStackConfigDoc.Fields[2].Type = "string"
 	OpenStackConfigDoc.Fields[2].Note = ""
-	OpenStackConfigDoc.Fields[2].Description = "Flavor ID (machine type) to use for the VMs. For details see: https://docs.openstack.org/nova/latest/admin/flavors.html"
-	OpenStackConfigDoc.Fields[2].Comments[encoder.LineComment] = "Flavor ID (machine type) to use for the VMs. For details see: https://docs.openstack.org/nova/latest/admin/flavors.html"
+	OpenStackConfigDoc.Fields[2].Description = "Availability zone to place the VMs in. For details see: https://docs.openstack.org/nova/latest/admin/availability-zones.html"
+	OpenStackConfigDoc.Fields[2].Comments[encoder.LineComment] = "Availability zone to place the VMs in. For details see: https://docs.openstack.org/nova/latest/admin/availability-zones.html"
 	OpenStackConfigDoc.Fields[3].Name = "floatingIPPoolID"
 	OpenStackConfigDoc.Fields[3].Type = "string"
 	OpenStackConfigDoc.Fields[3].Note = ""
 	OpenStackConfigDoc.Fields[3].Description = "Floating IP pool to use for the VMs. For details see: https://docs.openstack.org/ocata/user-guide/cli-manage-ip-addresses.html"
 	OpenStackConfigDoc.Fields[3].Comments[encoder.LineComment] = "Floating IP pool to use for the VMs. For details see: https://docs.openstack.org/ocata/user-guide/cli-manage-ip-addresses.html"
-	OpenStackConfigDoc.Fields[4].Name = "authURL"
+	OpenStackConfigDoc.Fields[4].Name = "stackitProjectID"
 	OpenStackConfigDoc.Fields[4].Type = "string"
 	OpenStackConfigDoc.Fields[4].Note = ""
-	OpenStackConfigDoc.Fields[4].Description = "description: |\nAuthURL is the OpenStack Identity endpoint to use inside the cluster.\n"
-	OpenStackConfigDoc.Fields[4].Comments[encoder.LineComment] = "description: |"
-	OpenStackConfigDoc.Fields[5].Name = "projectID"
+	OpenStackConfigDoc.Fields[4].Description = "STACKITProjectID is the ID of the STACKIT project where a user resides.\nOnly used if cloud is \"stackit\"."
+	OpenStackConfigDoc.Fields[4].Comments[encoder.LineComment] = "STACKITProjectID is the ID of the STACKIT project where a user resides."
+	OpenStackConfigDoc.Fields[5].Name = "regionName"
 	OpenStackConfigDoc.Fields[5].Type = "string"
 	OpenStackConfigDoc.Fields[5].Note = ""
-	OpenStackConfigDoc.Fields[5].Description = "ProjectID is the ID of the project where a user resides."
-	OpenStackConfigDoc.Fields[5].Comments[encoder.LineComment] = "ProjectID is the ID of the project where a user resides."
-	OpenStackConfigDoc.Fields[6].Name = "projectName"
-	OpenStackConfigDoc.Fields[6].Type = "string"
+	OpenStackConfigDoc.Fields[5].Description = "description: |\nRegionName is the name of the region to use inside the cluster.\n"
+	OpenStackConfigDoc.Fields[5].Comments[encoder.LineComment] = "description: |"
+	OpenStackConfigDoc.Fields[6].Name = "deployYawolLoadBalancer"
+	OpenStackConfigDoc.Fields[6].Type = "bool"
 	OpenStackConfigDoc.Fields[6].Note = ""
-	OpenStackConfigDoc.Fields[6].Description = "ProjectName is the name of the project where a user resides."
-	OpenStackConfigDoc.Fields[6].Comments[encoder.LineComment] = "ProjectName is the name of the project where a user resides."
-	OpenStackConfigDoc.Fields[7].Name = "userDomainName"
+	OpenStackConfigDoc.Fields[6].Description = "Deploy Yawol loadbalancer. For details see: https://github.com/stackitcloud/yawol"
+	OpenStackConfigDoc.Fields[6].Comments[encoder.LineComment] = "Deploy Yawol loadbalancer. For details see: https://github.com/stackitcloud/yawol"
+	OpenStackConfigDoc.Fields[7].Name = "yawolImageID"
 	OpenStackConfigDoc.Fields[7].Type = "string"
 	OpenStackConfigDoc.Fields[7].Note = ""
-	OpenStackConfigDoc.Fields[7].Description = "UserDomainName is the name of the domain where a user resides."
-	OpenStackConfigDoc.Fields[7].Comments[encoder.LineComment] = "UserDomainName is the name of the domain where a user resides."
-	OpenStackConfigDoc.Fields[8].Name = "projectDomainName"
+	OpenStackConfigDoc.Fields[7].Description = "OpenStack OS image used by the yawollet. For details see: https://github.com/stackitcloud/yawol"
+	OpenStackConfigDoc.Fields[7].Comments[encoder.LineComment] = "OpenStack OS image used by the yawollet. For details see: https://github.com/stackitcloud/yawol"
+	OpenStackConfigDoc.Fields[8].Name = "yawolFlavorID"
 	OpenStackConfigDoc.Fields[8].Type = "string"
 	OpenStackConfigDoc.Fields[8].Note = ""
-	OpenStackConfigDoc.Fields[8].Description = "ProjectDomainName is the name of the domain where a project resides."
-	OpenStackConfigDoc.Fields[8].Comments[encoder.LineComment] = "ProjectDomainName is the name of the domain where a project resides."
-	OpenStackConfigDoc.Fields[9].Name = "regionName"
-	OpenStackConfigDoc.Fields[9].Type = "string"
+	OpenStackConfigDoc.Fields[8].Description = "OpenStack flavor id used for yawollets. For details see: https://github.com/stackitcloud/yawol"
+	OpenStackConfigDoc.Fields[8].Comments[encoder.LineComment] = "OpenStack flavor id used for yawollets. For details see: https://github.com/stackitcloud/yawol"
+	OpenStackConfigDoc.Fields[9].Name = "deployCSIDriver"
+	OpenStackConfigDoc.Fields[9].Type = "bool"
 	OpenStackConfigDoc.Fields[9].Note = ""
-	OpenStackConfigDoc.Fields[9].Description = "description: |\nRegionName is the name of the region to use inside the cluster.\n"
-	OpenStackConfigDoc.Fields[9].Comments[encoder.LineComment] = "description: |"
-	OpenStackConfigDoc.Fields[10].Name = "username"
-	OpenStackConfigDoc.Fields[10].Type = "string"
-	OpenStackConfigDoc.Fields[10].Note = ""
-	OpenStackConfigDoc.Fields[10].Description = "Username to use inside the cluster."
-	OpenStackConfigDoc.Fields[10].Comments[encoder.LineComment] = "Username to use inside the cluster."
-	OpenStackConfigDoc.Fields[11].Name = "password"
-	OpenStackConfigDoc.Fields[11].Type = "string"
-	OpenStackConfigDoc.Fields[11].Note = ""
-	OpenStackConfigDoc.Fields[11].Description = "Password to use inside the cluster. You can instead use the environment variable \"CONSTELL_OS_PASSWORD\"."
-	OpenStackConfigDoc.Fields[11].Comments[encoder.LineComment] = "Password to use inside the cluster. You can instead use the environment variable \"CONSTELL_OS_PASSWORD\"."
-	OpenStackConfigDoc.Fields[12].Name = "directDownload"
-	OpenStackConfigDoc.Fields[12].Type = "bool"
-	OpenStackConfigDoc.Fields[12].Note = ""
-	OpenStackConfigDoc.Fields[12].Description = "If enabled, downloads OS image directly from source URL to OpenStack. Otherwise, downloads image to local machine and uploads to OpenStack."
-	OpenStackConfigDoc.Fields[12].Comments[encoder.LineComment] = "If enabled, downloads OS image directly from source URL to OpenStack. Otherwise, downloads image to local machine and uploads to OpenStack."
-	OpenStackConfigDoc.Fields[13].Name = "measurements"
-	OpenStackConfigDoc.Fields[13].Type = "Measurements"
-	OpenStackConfigDoc.Fields[13].Note = ""
-	OpenStackConfigDoc.Fields[13].Description = "Measurement used to enable measured boot."
-	OpenStackConfigDoc.Fields[13].Comments[encoder.LineComment] = "Measurement used to enable measured boot."
+	OpenStackConfigDoc.Fields[9].Description = "Deploy Cinder CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
+	OpenStackConfigDoc.Fields[9].Comments[encoder.LineComment] = "Deploy Cinder CSI driver with on-node encryption. For details see: https://docs.edgeless.systems/constellation/architecture/encrypted-storage"
 
 	QEMUConfigDoc.Type = "QEMUConfig"
 	QEMUConfigDoc.Comments[encoder.LineComment] = "QEMUConfig holds config information for QEMU based Constellation deployments."
@@ -386,7 +338,7 @@ func init() {
 			FieldName: "qemu",
 		},
 	}
-	QEMUConfigDoc.Fields = make([]encoder.Doc, 9)
+	QEMUConfigDoc.Fields = make([]encoder.Doc, 8)
 	QEMUConfigDoc.Fields[0].Name = "imageFormat"
 	QEMUConfigDoc.Fields[0].Type = "string"
 	QEMUConfigDoc.Fields[0].Note = ""
@@ -427,61 +379,108 @@ func init() {
 	QEMUConfigDoc.Fields[7].Note = ""
 	QEMUConfigDoc.Fields[7].Description = "Path to the OVMF firmware. Leave empty for auto selection."
 	QEMUConfigDoc.Fields[7].Comments[encoder.LineComment] = "Path to the OVMF firmware. Leave empty for auto selection."
-	QEMUConfigDoc.Fields[8].Name = "measurements"
-	QEMUConfigDoc.Fields[8].Type = "Measurements"
-	QEMUConfigDoc.Fields[8].Note = ""
-	QEMUConfigDoc.Fields[8].Description = "Measurement used to enable measured boot."
-	QEMUConfigDoc.Fields[8].Comments[encoder.LineComment] = "Measurement used to enable measured boot."
 
-	AWSNitroTPMDoc.Type = "AWSNitroTPM"
-	AWSNitroTPMDoc.Comments[encoder.LineComment] = "AWSNitroTPM is the configuration for AWS Nitro TPM attestation."
-	AWSNitroTPMDoc.Description = "AWSNitroTPM is the configuration for AWS Nitro TPM attestation."
-	AWSNitroTPMDoc.Fields = make([]encoder.Doc, 1)
-	AWSNitroTPMDoc.Fields[0].Name = "measurements"
-	AWSNitroTPMDoc.Fields[0].Type = "M"
-	AWSNitroTPMDoc.Fields[0].Note = ""
-	AWSNitroTPMDoc.Fields[0].Description = "Expected TPM measurements."
-	AWSNitroTPMDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+	AttestationConfigDoc.Type = "AttestationConfig"
+	AttestationConfigDoc.Comments[encoder.LineComment] = "AttestationConfig configuration values used for attestation."
+	AttestationConfigDoc.Description = "AttestationConfig configuration values used for attestation.\nFields should remain pointer-types so custom specific configs can nil them\nif not required.\n"
+	AttestationConfigDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "Config",
+			FieldName: "attestation",
+		},
+	}
+	AttestationConfigDoc.Fields = make([]encoder.Doc, 9)
+	AttestationConfigDoc.Fields[0].Name = "awsSEVSNP"
+	AttestationConfigDoc.Fields[0].Type = "AWSSEVSNP"
+	AttestationConfigDoc.Fields[0].Note = ""
+	AttestationConfigDoc.Fields[0].Description = "AWS SEV-SNP attestation."
+	AttestationConfigDoc.Fields[0].Comments[encoder.LineComment] = "AWS SEV-SNP attestation."
+	AttestationConfigDoc.Fields[1].Name = "awsNitroTPM"
+	AttestationConfigDoc.Fields[1].Type = "AWSNitroTPM"
+	AttestationConfigDoc.Fields[1].Note = ""
+	AttestationConfigDoc.Fields[1].Description = "AWS Nitro TPM attestation."
+	AttestationConfigDoc.Fields[1].Comments[encoder.LineComment] = "AWS Nitro TPM attestation."
+	AttestationConfigDoc.Fields[2].Name = "azureSEVSNP"
+	AttestationConfigDoc.Fields[2].Type = "AzureSEVSNP"
+	AttestationConfigDoc.Fields[2].Note = ""
+	AttestationConfigDoc.Fields[2].Description = "Azure SEV-SNP attestation.\nFor details see: https://docs.edgeless.systems/constellation/architecture/attestation#cvm-verification"
+	AttestationConfigDoc.Fields[2].Comments[encoder.LineComment] = "Azure SEV-SNP attestation.\nFor details see: https://docs.edgeless.systems/constellation/architecture/attestation#cvm-verification"
+	AttestationConfigDoc.Fields[3].Name = "azureTDX"
+	AttestationConfigDoc.Fields[3].Type = "AzureTDX"
+	AttestationConfigDoc.Fields[3].Note = ""
+	AttestationConfigDoc.Fields[3].Description = "Azure TDX attestation."
+	AttestationConfigDoc.Fields[3].Comments[encoder.LineComment] = "Azure TDX attestation."
+	AttestationConfigDoc.Fields[4].Name = "azureTrustedLaunch"
+	AttestationConfigDoc.Fields[4].Type = "AzureTrustedLaunch"
+	AttestationConfigDoc.Fields[4].Note = ""
+	AttestationConfigDoc.Fields[4].Description = "Azure TPM attestation (Trusted Launch)."
+	AttestationConfigDoc.Fields[4].Comments[encoder.LineComment] = "Azure TPM attestation (Trusted Launch)."
+	AttestationConfigDoc.Fields[5].Name = "gcpSEVES"
+	AttestationConfigDoc.Fields[5].Type = "GCPSEVES"
+	AttestationConfigDoc.Fields[5].Note = ""
+	AttestationConfigDoc.Fields[5].Description = "GCP SEV-ES attestation."
+	AttestationConfigDoc.Fields[5].Comments[encoder.LineComment] = "GCP SEV-ES attestation."
+	AttestationConfigDoc.Fields[6].Name = "gcpSEVSNP"
+	AttestationConfigDoc.Fields[6].Type = "GCPSEVSNP"
+	AttestationConfigDoc.Fields[6].Note = ""
+	AttestationConfigDoc.Fields[6].Description = "description: |\n GCP SEV-SNP attestation.\n"
+	AttestationConfigDoc.Fields[6].Comments[encoder.LineComment] = "description: |"
+	AttestationConfigDoc.Fields[7].Name = "qemuTDX"
+	AttestationConfigDoc.Fields[7].Type = "QEMUTDX"
+	AttestationConfigDoc.Fields[7].Note = ""
+	AttestationConfigDoc.Fields[7].Description = "QEMU tdx attestation."
+	AttestationConfigDoc.Fields[7].Comments[encoder.LineComment] = "QEMU tdx attestation."
+	AttestationConfigDoc.Fields[8].Name = "qemuVTPM"
+	AttestationConfigDoc.Fields[8].Type = "QEMUVTPM"
+	AttestationConfigDoc.Fields[8].Note = ""
+	AttestationConfigDoc.Fields[8].Description = "QEMU vTPM attestation."
+	AttestationConfigDoc.Fields[8].Comments[encoder.LineComment] = "QEMU vTPM attestation."
 
-	AzureSEVSNPDoc.Type = "AzureSEVSNP"
-	AzureSEVSNPDoc.Comments[encoder.LineComment] = "AzureSEVSNP is the configuration for Azure SEV-SNP attestation."
-	AzureSEVSNPDoc.Description = "AzureSEVSNP is the configuration for Azure SEV-SNP attestation."
-	AzureSEVSNPDoc.Fields = make([]encoder.Doc, 7)
-	AzureSEVSNPDoc.Fields[0].Name = "measurements"
-	AzureSEVSNPDoc.Fields[0].Type = "M"
-	AzureSEVSNPDoc.Fields[0].Note = ""
-	AzureSEVSNPDoc.Fields[0].Description = "Expected confidential VM measurements."
-	AzureSEVSNPDoc.Fields[0].Comments[encoder.LineComment] = "Expected confidential VM measurements."
-	AzureSEVSNPDoc.Fields[1].Name = "bootloaderVersion"
-	AzureSEVSNPDoc.Fields[1].Type = "uint8"
-	AzureSEVSNPDoc.Fields[1].Note = ""
-	AzureSEVSNPDoc.Fields[1].Description = "Lowest acceptable bootloader version."
-	AzureSEVSNPDoc.Fields[1].Comments[encoder.LineComment] = "Lowest acceptable bootloader version."
-	AzureSEVSNPDoc.Fields[2].Name = "teeVersion"
-	AzureSEVSNPDoc.Fields[2].Type = "uint8"
-	AzureSEVSNPDoc.Fields[2].Note = ""
-	AzureSEVSNPDoc.Fields[2].Description = "Lowest acceptable TEE version."
-	AzureSEVSNPDoc.Fields[2].Comments[encoder.LineComment] = "Lowest acceptable TEE version."
-	AzureSEVSNPDoc.Fields[3].Name = "snpVersion"
-	AzureSEVSNPDoc.Fields[3].Type = "uint8"
-	AzureSEVSNPDoc.Fields[3].Note = ""
-	AzureSEVSNPDoc.Fields[3].Description = "Lowest acceptable SEV-SNP version."
-	AzureSEVSNPDoc.Fields[3].Comments[encoder.LineComment] = "Lowest acceptable SEV-SNP version."
-	AzureSEVSNPDoc.Fields[4].Name = "microcodeVersion"
-	AzureSEVSNPDoc.Fields[4].Type = "uint8"
-	AzureSEVSNPDoc.Fields[4].Note = ""
-	AzureSEVSNPDoc.Fields[4].Description = "Lowest acceptable microcode version."
-	AzureSEVSNPDoc.Fields[4].Comments[encoder.LineComment] = "Lowest acceptable microcode version."
-	AzureSEVSNPDoc.Fields[5].Name = "firmwareSignerConfig"
-	AzureSEVSNPDoc.Fields[5].Type = "SNPFirmwareSignerConfig"
-	AzureSEVSNPDoc.Fields[5].Note = ""
-	AzureSEVSNPDoc.Fields[5].Description = "Configuration for validating the firmware signature."
-	AzureSEVSNPDoc.Fields[5].Comments[encoder.LineComment] = "Configuration for validating the firmware signature."
-	AzureSEVSNPDoc.Fields[6].Name = "amdRootKey"
-	AzureSEVSNPDoc.Fields[6].Type = "Certificate"
-	AzureSEVSNPDoc.Fields[6].Note = ""
-	AzureSEVSNPDoc.Fields[6].Description = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
-	AzureSEVSNPDoc.Fields[6].Comments[encoder.LineComment] = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
+	NodeGroupDoc.Type = "NodeGroup"
+	NodeGroupDoc.Comments[encoder.LineComment] = "NodeGroup defines a group of nodes with the same role and configuration."
+	NodeGroupDoc.Description = "NodeGroup defines a group of nodes with the same role and configuration.\nCloud providers use scaling groups to manage nodes of a group.\n"
+	NodeGroupDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "Config",
+			FieldName: "nodeGroups",
+		},
+	}
+	NodeGroupDoc.Fields = make([]encoder.Doc, 6)
+	NodeGroupDoc.Fields[0].Name = "role"
+	NodeGroupDoc.Fields[0].Type = "string"
+	NodeGroupDoc.Fields[0].Note = ""
+	NodeGroupDoc.Fields[0].Description = "Role of the nodes in this group. Valid values are \"control-plane\" and \"worker\"."
+	NodeGroupDoc.Fields[0].Comments[encoder.LineComment] = "Role of the nodes in this group. Valid values are \"control-plane\" and \"worker\"."
+	NodeGroupDoc.Fields[1].Name = "zone"
+	NodeGroupDoc.Fields[1].Type = "string"
+	NodeGroupDoc.Fields[1].Note = ""
+	NodeGroupDoc.Fields[1].Description = "Availability zone to place the VMs in."
+	NodeGroupDoc.Fields[1].Comments[encoder.LineComment] = "Availability zone to place the VMs in."
+	NodeGroupDoc.Fields[2].Name = "instanceType"
+	NodeGroupDoc.Fields[2].Type = "string"
+	NodeGroupDoc.Fields[2].Note = ""
+	NodeGroupDoc.Fields[2].Description = "VM instance type to use for the nodes."
+	NodeGroupDoc.Fields[2].Comments[encoder.LineComment] = "VM instance type to use for the nodes."
+	NodeGroupDoc.Fields[3].Name = "stateDiskSizeGB"
+	NodeGroupDoc.Fields[3].Type = "int"
+	NodeGroupDoc.Fields[3].Note = ""
+	NodeGroupDoc.Fields[3].Description = "Size (in GB) of a node's disk to store the non-volatile state."
+	NodeGroupDoc.Fields[3].Comments[encoder.LineComment] = "Size (in GB) of a node's disk to store the non-volatile state."
+	NodeGroupDoc.Fields[4].Name = "stateDiskType"
+	NodeGroupDoc.Fields[4].Type = "string"
+	NodeGroupDoc.Fields[4].Note = ""
+	NodeGroupDoc.Fields[4].Description = "Type of a node's state disk. The type influences boot time and I/O performance."
+	NodeGroupDoc.Fields[4].Comments[encoder.LineComment] = "Type of a node's state disk. The type influences boot time and I/O performance."
+	NodeGroupDoc.Fields[5].Name = "initialCount"
+	NodeGroupDoc.Fields[5].Type = "int"
+	NodeGroupDoc.Fields[5].Note = ""
+	NodeGroupDoc.Fields[5].Description = "Number of nodes to be initially created."
+	NodeGroupDoc.Fields[5].Comments[encoder.LineComment] = "Number of nodes to be initially created."
+
+	UnsupportedAppRegistrationErrorDoc.Type = "UnsupportedAppRegistrationError"
+	UnsupportedAppRegistrationErrorDoc.Comments[encoder.LineComment] = "UnsupportedAppRegistrationError is returned when the config contains configuration related to now unsupported app registrations."
+	UnsupportedAppRegistrationErrorDoc.Description = "UnsupportedAppRegistrationError is returned when the config contains configuration related to now unsupported app registrations."
+	UnsupportedAppRegistrationErrorDoc.Fields = make([]encoder.Doc, 0)
 
 	SNPFirmwareSignerConfigDoc.Type = "SNPFirmwareSignerConfig"
 	SNPFirmwareSignerConfigDoc.Comments[encoder.LineComment] = "SNPFirmwareSignerConfig is the configuration for validating the firmware signer."
@@ -509,19 +508,15 @@ func init() {
 	SNPFirmwareSignerConfigDoc.Fields[2].Description = "URL of the Microsoft Azure Attestation (MAA) instance to use for fallback validation. Only used if 'enforcementPolicy' is set to 'maaFallback'."
 	SNPFirmwareSignerConfigDoc.Fields[2].Comments[encoder.LineComment] = "URL of the Microsoft Azure Attestation (MAA) instance to use for fallback validation. Only used if 'enforcementPolicy' is set to 'maaFallback'."
 
-	AzureTrustedLaunchDoc.Type = "AzureTrustedLaunch"
-	AzureTrustedLaunchDoc.Comments[encoder.LineComment] = "AzureTrustedLaunch is the configuration for Azure Trusted Launch attestation."
-	AzureTrustedLaunchDoc.Description = "AzureTrustedLaunch is the configuration for Azure Trusted Launch attestation."
-	AzureTrustedLaunchDoc.Fields = make([]encoder.Doc, 1)
-	AzureTrustedLaunchDoc.Fields[0].Name = "measurements"
-	AzureTrustedLaunchDoc.Fields[0].Type = "M"
-	AzureTrustedLaunchDoc.Fields[0].Note = ""
-	AzureTrustedLaunchDoc.Fields[0].Description = "Expected TPM measurements."
-	AzureTrustedLaunchDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
-
 	GCPSEVESDoc.Type = "GCPSEVES"
 	GCPSEVESDoc.Comments[encoder.LineComment] = "GCPSEVES is the configuration for GCP SEV-ES attestation."
 	GCPSEVESDoc.Description = "GCPSEVES is the configuration for GCP SEV-ES attestation."
+	GCPSEVESDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "gcpSEVES",
+		},
+	}
 	GCPSEVESDoc.Fields = make([]encoder.Doc, 1)
 	GCPSEVESDoc.Fields[0].Name = "measurements"
 	GCPSEVESDoc.Fields[0].Type = "M"
@@ -529,15 +524,263 @@ func init() {
 	GCPSEVESDoc.Fields[0].Description = "Expected TPM measurements."
 	GCPSEVESDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
 
+	GCPSEVSNPDoc.Type = "GCPSEVSNP"
+	GCPSEVSNPDoc.Comments[encoder.LineComment] = "GCPSEVSNP is the configuration for GCP SEV-SNP attestation."
+	GCPSEVSNPDoc.Description = "GCPSEVSNP is the configuration for GCP SEV-SNP attestation."
+	GCPSEVSNPDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "gcpSEVSNP",
+		},
+	}
+	GCPSEVSNPDoc.Fields = make([]encoder.Doc, 7)
+	GCPSEVSNPDoc.Fields[0].Name = "measurements"
+	GCPSEVSNPDoc.Fields[0].Type = "M"
+	GCPSEVSNPDoc.Fields[0].Note = ""
+	GCPSEVSNPDoc.Fields[0].Description = "Expected TPM measurements."
+	GCPSEVSNPDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+	GCPSEVSNPDoc.Fields[1].Name = "bootloaderVersion"
+	GCPSEVSNPDoc.Fields[1].Type = "AttestationVersion"
+	GCPSEVSNPDoc.Fields[1].Note = ""
+	GCPSEVSNPDoc.Fields[1].Description = "Lowest acceptable bootloader version."
+	GCPSEVSNPDoc.Fields[1].Comments[encoder.LineComment] = "Lowest acceptable bootloader version."
+	GCPSEVSNPDoc.Fields[2].Name = "teeVersion"
+	GCPSEVSNPDoc.Fields[2].Type = "AttestationVersion"
+	GCPSEVSNPDoc.Fields[2].Note = ""
+	GCPSEVSNPDoc.Fields[2].Description = "Lowest acceptable TEE version."
+	GCPSEVSNPDoc.Fields[2].Comments[encoder.LineComment] = "Lowest acceptable TEE version."
+	GCPSEVSNPDoc.Fields[3].Name = "snpVersion"
+	GCPSEVSNPDoc.Fields[3].Type = "AttestationVersion"
+	GCPSEVSNPDoc.Fields[3].Note = ""
+	GCPSEVSNPDoc.Fields[3].Description = "Lowest acceptable SEV-SNP version."
+	GCPSEVSNPDoc.Fields[3].Comments[encoder.LineComment] = "Lowest acceptable SEV-SNP version."
+	GCPSEVSNPDoc.Fields[4].Name = "microcodeVersion"
+	GCPSEVSNPDoc.Fields[4].Type = "AttestationVersion"
+	GCPSEVSNPDoc.Fields[4].Note = ""
+	GCPSEVSNPDoc.Fields[4].Description = "Lowest acceptable microcode version."
+	GCPSEVSNPDoc.Fields[4].Comments[encoder.LineComment] = "Lowest acceptable microcode version."
+	GCPSEVSNPDoc.Fields[5].Name = "amdRootKey"
+	GCPSEVSNPDoc.Fields[5].Type = "Certificate"
+	GCPSEVSNPDoc.Fields[5].Note = ""
+	GCPSEVSNPDoc.Fields[5].Description = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
+	GCPSEVSNPDoc.Fields[5].Comments[encoder.LineComment] = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
+	GCPSEVSNPDoc.Fields[6].Name = "amdSigningKey"
+	GCPSEVSNPDoc.Fields[6].Type = "Certificate"
+	GCPSEVSNPDoc.Fields[6].Note = ""
+	GCPSEVSNPDoc.Fields[6].Description = "AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate."
+	GCPSEVSNPDoc.Fields[6].Comments[encoder.LineComment] = "AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate."
+
 	QEMUVTPMDoc.Type = "QEMUVTPM"
 	QEMUVTPMDoc.Comments[encoder.LineComment] = "QEMUVTPM is the configuration for QEMU vTPM attestation."
 	QEMUVTPMDoc.Description = "QEMUVTPM is the configuration for QEMU vTPM attestation."
+	QEMUVTPMDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "qemuVTPM",
+		},
+	}
 	QEMUVTPMDoc.Fields = make([]encoder.Doc, 1)
 	QEMUVTPMDoc.Fields[0].Name = "measurements"
 	QEMUVTPMDoc.Fields[0].Type = "M"
 	QEMUVTPMDoc.Fields[0].Note = ""
 	QEMUVTPMDoc.Fields[0].Description = "Expected TPM measurements."
 	QEMUVTPMDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+
+	QEMUTDXDoc.Type = "QEMUTDX"
+	QEMUTDXDoc.Comments[encoder.LineComment] = "QEMUTDX is the configuration for QEMU TDX attestation."
+	QEMUTDXDoc.Description = "QEMUTDX is the configuration for QEMU TDX attestation."
+	QEMUTDXDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "qemuTDX",
+		},
+	}
+	QEMUTDXDoc.Fields = make([]encoder.Doc, 1)
+	QEMUTDXDoc.Fields[0].Name = "measurements"
+	QEMUTDXDoc.Fields[0].Type = "M"
+	QEMUTDXDoc.Fields[0].Note = ""
+	QEMUTDXDoc.Fields[0].Description = "Expected TDX measurements."
+	QEMUTDXDoc.Fields[0].Comments[encoder.LineComment] = "Expected TDX measurements."
+
+	AWSSEVSNPDoc.Type = "AWSSEVSNP"
+	AWSSEVSNPDoc.Comments[encoder.LineComment] = "AWSSEVSNP is the configuration for AWS SEV-SNP attestation."
+	AWSSEVSNPDoc.Description = "AWSSEVSNP is the configuration for AWS SEV-SNP attestation."
+	AWSSEVSNPDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "awsSEVSNP",
+		},
+	}
+	AWSSEVSNPDoc.Fields = make([]encoder.Doc, 7)
+	AWSSEVSNPDoc.Fields[0].Name = "measurements"
+	AWSSEVSNPDoc.Fields[0].Type = "M"
+	AWSSEVSNPDoc.Fields[0].Note = ""
+	AWSSEVSNPDoc.Fields[0].Description = "Expected TPM measurements."
+	AWSSEVSNPDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+	AWSSEVSNPDoc.Fields[1].Name = "bootloaderVersion"
+	AWSSEVSNPDoc.Fields[1].Type = "AttestationVersion"
+	AWSSEVSNPDoc.Fields[1].Note = ""
+	AWSSEVSNPDoc.Fields[1].Description = "Lowest acceptable bootloader version."
+	AWSSEVSNPDoc.Fields[1].Comments[encoder.LineComment] = "Lowest acceptable bootloader version."
+	AWSSEVSNPDoc.Fields[2].Name = "teeVersion"
+	AWSSEVSNPDoc.Fields[2].Type = "AttestationVersion"
+	AWSSEVSNPDoc.Fields[2].Note = ""
+	AWSSEVSNPDoc.Fields[2].Description = "Lowest acceptable TEE version."
+	AWSSEVSNPDoc.Fields[2].Comments[encoder.LineComment] = "Lowest acceptable TEE version."
+	AWSSEVSNPDoc.Fields[3].Name = "snpVersion"
+	AWSSEVSNPDoc.Fields[3].Type = "AttestationVersion"
+	AWSSEVSNPDoc.Fields[3].Note = ""
+	AWSSEVSNPDoc.Fields[3].Description = "Lowest acceptable SEV-SNP version."
+	AWSSEVSNPDoc.Fields[3].Comments[encoder.LineComment] = "Lowest acceptable SEV-SNP version."
+	AWSSEVSNPDoc.Fields[4].Name = "microcodeVersion"
+	AWSSEVSNPDoc.Fields[4].Type = "AttestationVersion"
+	AWSSEVSNPDoc.Fields[4].Note = ""
+	AWSSEVSNPDoc.Fields[4].Description = "Lowest acceptable microcode version."
+	AWSSEVSNPDoc.Fields[4].Comments[encoder.LineComment] = "Lowest acceptable microcode version."
+	AWSSEVSNPDoc.Fields[5].Name = "amdRootKey"
+	AWSSEVSNPDoc.Fields[5].Type = "Certificate"
+	AWSSEVSNPDoc.Fields[5].Note = ""
+	AWSSEVSNPDoc.Fields[5].Description = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
+	AWSSEVSNPDoc.Fields[5].Comments[encoder.LineComment] = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
+	AWSSEVSNPDoc.Fields[6].Name = "amdSigningKey"
+	AWSSEVSNPDoc.Fields[6].Type = "Certificate"
+	AWSSEVSNPDoc.Fields[6].Note = ""
+	AWSSEVSNPDoc.Fields[6].Description = "AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate."
+	AWSSEVSNPDoc.Fields[6].Comments[encoder.LineComment] = "AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate."
+
+	AWSNitroTPMDoc.Type = "AWSNitroTPM"
+	AWSNitroTPMDoc.Comments[encoder.LineComment] = "AWSNitroTPM is the configuration for AWS Nitro TPM attestation."
+	AWSNitroTPMDoc.Description = "AWSNitroTPM is the configuration for AWS Nitro TPM attestation."
+	AWSNitroTPMDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "awsNitroTPM",
+		},
+	}
+	AWSNitroTPMDoc.Fields = make([]encoder.Doc, 1)
+	AWSNitroTPMDoc.Fields[0].Name = "measurements"
+	AWSNitroTPMDoc.Fields[0].Type = "M"
+	AWSNitroTPMDoc.Fields[0].Note = ""
+	AWSNitroTPMDoc.Fields[0].Description = "Expected TPM measurements."
+	AWSNitroTPMDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+
+	AzureSEVSNPDoc.Type = "AzureSEVSNP"
+	AzureSEVSNPDoc.Comments[encoder.LineComment] = "AzureSEVSNP is the configuration for Azure SEV-SNP attestation."
+	AzureSEVSNPDoc.Description = "AzureSEVSNP is the configuration for Azure SEV-SNP attestation."
+	AzureSEVSNPDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "azureSEVSNP",
+		},
+	}
+	AzureSEVSNPDoc.Fields = make([]encoder.Doc, 8)
+	AzureSEVSNPDoc.Fields[0].Name = "measurements"
+	AzureSEVSNPDoc.Fields[0].Type = "M"
+	AzureSEVSNPDoc.Fields[0].Note = ""
+	AzureSEVSNPDoc.Fields[0].Description = "Expected TPM measurements."
+	AzureSEVSNPDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+	AzureSEVSNPDoc.Fields[1].Name = "bootloaderVersion"
+	AzureSEVSNPDoc.Fields[1].Type = "AttestationVersion"
+	AzureSEVSNPDoc.Fields[1].Note = ""
+	AzureSEVSNPDoc.Fields[1].Description = "Lowest acceptable bootloader version."
+	AzureSEVSNPDoc.Fields[1].Comments[encoder.LineComment] = "Lowest acceptable bootloader version."
+	AzureSEVSNPDoc.Fields[2].Name = "teeVersion"
+	AzureSEVSNPDoc.Fields[2].Type = "AttestationVersion"
+	AzureSEVSNPDoc.Fields[2].Note = ""
+	AzureSEVSNPDoc.Fields[2].Description = "Lowest acceptable TEE version."
+	AzureSEVSNPDoc.Fields[2].Comments[encoder.LineComment] = "Lowest acceptable TEE version."
+	AzureSEVSNPDoc.Fields[3].Name = "snpVersion"
+	AzureSEVSNPDoc.Fields[3].Type = "AttestationVersion"
+	AzureSEVSNPDoc.Fields[3].Note = ""
+	AzureSEVSNPDoc.Fields[3].Description = "Lowest acceptable SEV-SNP version."
+	AzureSEVSNPDoc.Fields[3].Comments[encoder.LineComment] = "Lowest acceptable SEV-SNP version."
+	AzureSEVSNPDoc.Fields[4].Name = "microcodeVersion"
+	AzureSEVSNPDoc.Fields[4].Type = "AttestationVersion"
+	AzureSEVSNPDoc.Fields[4].Note = ""
+	AzureSEVSNPDoc.Fields[4].Description = "Lowest acceptable microcode version."
+	AzureSEVSNPDoc.Fields[4].Comments[encoder.LineComment] = "Lowest acceptable microcode version."
+	AzureSEVSNPDoc.Fields[5].Name = "firmwareSignerConfig"
+	AzureSEVSNPDoc.Fields[5].Type = "SNPFirmwareSignerConfig"
+	AzureSEVSNPDoc.Fields[5].Note = ""
+	AzureSEVSNPDoc.Fields[5].Description = "Configuration for validating the firmware signature."
+	AzureSEVSNPDoc.Fields[5].Comments[encoder.LineComment] = "Configuration for validating the firmware signature."
+	AzureSEVSNPDoc.Fields[6].Name = "amdRootKey"
+	AzureSEVSNPDoc.Fields[6].Type = "Certificate"
+	AzureSEVSNPDoc.Fields[6].Note = ""
+	AzureSEVSNPDoc.Fields[6].Description = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
+	AzureSEVSNPDoc.Fields[6].Comments[encoder.LineComment] = "AMD Root Key certificate used to verify the SEV-SNP certificate chain."
+	AzureSEVSNPDoc.Fields[7].Name = "amdSigningKey"
+	AzureSEVSNPDoc.Fields[7].Type = "Certificate"
+	AzureSEVSNPDoc.Fields[7].Note = ""
+	AzureSEVSNPDoc.Fields[7].Description = "AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate."
+	AzureSEVSNPDoc.Fields[7].Comments[encoder.LineComment] = "AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate."
+
+	AzureTrustedLaunchDoc.Type = "AzureTrustedLaunch"
+	AzureTrustedLaunchDoc.Comments[encoder.LineComment] = "AzureTrustedLaunch is the configuration for Azure Trusted Launch attestation."
+	AzureTrustedLaunchDoc.Description = "AzureTrustedLaunch is the configuration for Azure Trusted Launch attestation."
+	AzureTrustedLaunchDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "azureTrustedLaunch",
+		},
+	}
+	AzureTrustedLaunchDoc.Fields = make([]encoder.Doc, 1)
+	AzureTrustedLaunchDoc.Fields[0].Name = "measurements"
+	AzureTrustedLaunchDoc.Fields[0].Type = "M"
+	AzureTrustedLaunchDoc.Fields[0].Note = ""
+	AzureTrustedLaunchDoc.Fields[0].Description = "Expected TPM measurements."
+	AzureTrustedLaunchDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+
+	AzureTDXDoc.Type = "AzureTDX"
+	AzureTDXDoc.Comments[encoder.LineComment] = "AzureTDX is the configuration for Azure TDX attestation."
+	AzureTDXDoc.Description = "AzureTDX is the configuration for Azure TDX attestation."
+	AzureTDXDoc.AppearsIn = []encoder.Appearance{
+		{
+			TypeName:  "AttestationConfig",
+			FieldName: "azureTDX",
+		},
+	}
+	AzureTDXDoc.Fields = make([]encoder.Doc, 8)
+	AzureTDXDoc.Fields[0].Name = "measurements"
+	AzureTDXDoc.Fields[0].Type = "M"
+	AzureTDXDoc.Fields[0].Note = ""
+	AzureTDXDoc.Fields[0].Description = "Expected TPM measurements."
+	AzureTDXDoc.Fields[0].Comments[encoder.LineComment] = "Expected TPM measurements."
+	AzureTDXDoc.Fields[1].Name = "qeSVN"
+	AzureTDXDoc.Fields[1].Type = "uint16"
+	AzureTDXDoc.Fields[1].Note = ""
+	AzureTDXDoc.Fields[1].Description = "Minimum required QE security version number (SVN)."
+	AzureTDXDoc.Fields[1].Comments[encoder.LineComment] = "Minimum required QE security version number (SVN)."
+	AzureTDXDoc.Fields[2].Name = "pceSVN"
+	AzureTDXDoc.Fields[2].Type = "uint16"
+	AzureTDXDoc.Fields[2].Note = ""
+	AzureTDXDoc.Fields[2].Description = "Minimum required PCE security version number (SVN)."
+	AzureTDXDoc.Fields[2].Comments[encoder.LineComment] = "Minimum required PCE security version number (SVN)."
+	AzureTDXDoc.Fields[3].Name = "teeTCBSVN"
+	AzureTDXDoc.Fields[3].Type = "HexBytes"
+	AzureTDXDoc.Fields[3].Note = ""
+	AzureTDXDoc.Fields[3].Description = "Component-wise minimum required 16 byte hex-encoded TEE_TCB security version number (SVN)."
+	AzureTDXDoc.Fields[3].Comments[encoder.LineComment] = "Component-wise minimum required 16 byte hex-encoded TEE_TCB security version number (SVN)."
+	AzureTDXDoc.Fields[4].Name = "qeVendorID"
+	AzureTDXDoc.Fields[4].Type = "HexBytes"
+	AzureTDXDoc.Fields[4].Note = ""
+	AzureTDXDoc.Fields[4].Description = "Expected 16 byte hex-encoded QE_VENDOR_ID field."
+	AzureTDXDoc.Fields[4].Comments[encoder.LineComment] = "Expected 16 byte hex-encoded QE_VENDOR_ID field."
+	AzureTDXDoc.Fields[5].Name = "mrSeam"
+	AzureTDXDoc.Fields[5].Type = "HexBytes"
+	AzureTDXDoc.Fields[5].Note = ""
+	AzureTDXDoc.Fields[5].Description = "Expected 48 byte hex-encoded MR_SEAM value."
+	AzureTDXDoc.Fields[5].Comments[encoder.LineComment] = "Expected 48 byte hex-encoded MR_SEAM value."
+	AzureTDXDoc.Fields[6].Name = "xfam"
+	AzureTDXDoc.Fields[6].Type = "HexBytes"
+	AzureTDXDoc.Fields[6].Note = ""
+	AzureTDXDoc.Fields[6].Description = "Expected 8 byte hex-encoded XFAM field."
+	AzureTDXDoc.Fields[6].Comments[encoder.LineComment] = "Expected 8 byte hex-encoded XFAM field."
+	AzureTDXDoc.Fields[7].Name = "intelRootKey"
+	AzureTDXDoc.Fields[7].Type = "Certificate"
+	AzureTDXDoc.Fields[7].Note = ""
+	AzureTDXDoc.Fields[7].Description = "Intel Root Key certificate used to verify the TDX certificate chain."
+	AzureTDXDoc.Fields[7].Comments[encoder.LineComment] = "Intel Root Key certificate used to verify the TDX certificate chain."
 }
 
 func (_ Config) Doc() *encoder.Doc {
@@ -568,6 +811,42 @@ func (_ QEMUConfig) Doc() *encoder.Doc {
 	return &QEMUConfigDoc
 }
 
+func (_ AttestationConfig) Doc() *encoder.Doc {
+	return &AttestationConfigDoc
+}
+
+func (_ NodeGroup) Doc() *encoder.Doc {
+	return &NodeGroupDoc
+}
+
+func (_ UnsupportedAppRegistrationError) Doc() *encoder.Doc {
+	return &UnsupportedAppRegistrationErrorDoc
+}
+
+func (_ SNPFirmwareSignerConfig) Doc() *encoder.Doc {
+	return &SNPFirmwareSignerConfigDoc
+}
+
+func (_ GCPSEVES) Doc() *encoder.Doc {
+	return &GCPSEVESDoc
+}
+
+func (_ GCPSEVSNP) Doc() *encoder.Doc {
+	return &GCPSEVSNPDoc
+}
+
+func (_ QEMUVTPM) Doc() *encoder.Doc {
+	return &QEMUVTPMDoc
+}
+
+func (_ QEMUTDX) Doc() *encoder.Doc {
+	return &QEMUTDXDoc
+}
+
+func (_ AWSSEVSNP) Doc() *encoder.Doc {
+	return &AWSSEVSNPDoc
+}
+
 func (_ AWSNitroTPM) Doc() *encoder.Doc {
 	return &AWSNitroTPMDoc
 }
@@ -576,20 +855,12 @@ func (_ AzureSEVSNP) Doc() *encoder.Doc {
 	return &AzureSEVSNPDoc
 }
 
-func (_ SNPFirmwareSignerConfig) Doc() *encoder.Doc {
-	return &SNPFirmwareSignerConfigDoc
-}
-
 func (_ AzureTrustedLaunch) Doc() *encoder.Doc {
 	return &AzureTrustedLaunchDoc
 }
 
-func (_ GCPSEVES) Doc() *encoder.Doc {
-	return &GCPSEVESDoc
-}
-
-func (_ QEMUVTPM) Doc() *encoder.Doc {
-	return &QEMUVTPMDoc
+func (_ AzureTDX) Doc() *encoder.Doc {
+	return &AzureTDXDoc
 }
 
 // GetConfigurationDoc returns documentation for the file ./config_doc.go.
@@ -605,12 +876,19 @@ func GetConfigurationDoc() *encoder.FileDoc {
 			&GCPConfigDoc,
 			&OpenStackConfigDoc,
 			&QEMUConfigDoc,
+			&AttestationConfigDoc,
+			&NodeGroupDoc,
+			&UnsupportedAppRegistrationErrorDoc,
+			&SNPFirmwareSignerConfigDoc,
+			&GCPSEVESDoc,
+			&GCPSEVSNPDoc,
+			&QEMUVTPMDoc,
+			&QEMUTDXDoc,
+			&AWSSEVSNPDoc,
 			&AWSNitroTPMDoc,
 			&AzureSEVSNPDoc,
-			&SNPFirmwareSignerConfigDoc,
 			&AzureTrustedLaunchDoc,
-			&GCPSEVESDoc,
-			&QEMUVTPMDoc,
+			&AzureTDXDoc,
 		},
 	}
 }

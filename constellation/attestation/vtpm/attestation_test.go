@@ -13,15 +13,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 
 	tpmclient "github.com/google/go-tpm-tools/client"
 	"github.com/google/go-tpm-tools/proto/attest"
 	"github.com/google/go-tpm-tools/proto/tpm"
-	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/legacy/tpm2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/konvera/geth-sev/constellation/attestation/initialize"
 	"github.com/konvera/geth-sev/constellation/attestation/measurements"
 	"github.com/konvera/geth-sev/constellation/attestation/simulator"
 	tpmsim "github.com/konvera/geth-sev/constellation/attestation/simulator"
@@ -57,6 +59,10 @@ func fakeGetInstanceInfo(_ context.Context, _ io.ReadWriteCloser, _ []byte) ([]b
 }
 
 func TestValidate(t *testing.T) {
+	cgo := os.Getenv("CGO_ENABLED")
+	if cgo == "0" {
+		t.Skip("skipping test because CGO is disabled and tpm simulator requires it")
+	}
 	require := require.New(t)
 
 	fakeValidateCVM := func(AttestationDocument, *attest.MachineState) error { return nil }
@@ -69,9 +75,9 @@ func TestValidate(t *testing.T) {
 	}
 
 	testExpectedPCRs := measurements.M{
-		0:                                      measurements.WithAllBytes(0x00, measurements.Enforce),
-		1:                                      measurements.WithAllBytes(0x00, measurements.Enforce),
-		uint32(measurements.PCRIndexClusterID): measurements.WithAllBytes(0x00, measurements.Enforce),
+		0:                                      measurements.WithAllBytes(0x00, measurements.Enforce, measurements.PCRMeasurementLength),
+		1:                                      measurements.WithAllBytes(0x00, measurements.Enforce, measurements.PCRMeasurementLength),
+		uint32(measurements.PCRIndexClusterID): measurements.WithAllBytes(0x00, measurements.Enforce, measurements.PCRMeasurementLength),
 	}
 	warnLog := &testAttestationLogger{}
 
@@ -79,7 +85,7 @@ func TestValidate(t *testing.T) {
 	defer tpmCloser.Close()
 
 	issuer := NewIssuer(tpmOpen, tpmclient.AttestationKeyRSA, fakeGetInstanceInfo, logger.NewTest(t))
-	validator := NewValidator(testExpectedPCRs, fakeGetTrustedKey, fakeValidateCVM, nil)
+	validator := NewValidator(testExpectedPCRs, fakeGetTrustedKey, fakeValidateCVM, logger.NewTest(t))
 
 	nonce := []byte{1, 2, 3, 4}
 	challenge := []byte("Constellation")
@@ -100,7 +106,7 @@ func TestValidate(t *testing.T) {
 	require.Equal(challenge, out)
 
 	// validation must fail after bootstrapping (change of enforced PCR)
-	require.NoError(MarkNodeAsBootstrapped(tpmOpen, []byte{2}))
+	require.NoError(initialize.MarkNodeAsBootstrapped(tpmOpen, []byte{2}))
 	attDocBootstrappedRaw, err := issuer.Issue(ctx, challenge, nonce)
 	require.NoError(err)
 	_, err = validator.Validate(ctx, attDocBootstrappedRaw, nonce)
@@ -118,22 +124,22 @@ func TestValidate(t *testing.T) {
 	require.Error(err)
 
 	expectedPCRs := measurements.M{
-		0: measurements.WithAllBytes(0x00, measurements.WarnOnly),
-		1: measurements.WithAllBytes(0x00, measurements.WarnOnly),
+		0: measurements.WithAllBytes(0x00, measurements.WarnOnly, measurements.PCRMeasurementLength),
+		1: measurements.WithAllBytes(0x00, measurements.WarnOnly, measurements.PCRMeasurementLength),
 		2: measurements.Measurement{
-			Expected:      [32]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20},
+			Expected:      []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20},
 			ValidationOpt: measurements.WarnOnly,
 		},
 		3: measurements.Measurement{
-			Expected:      [32]byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40},
+			Expected:      []byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40},
 			ValidationOpt: measurements.WarnOnly,
 		},
 		4: measurements.Measurement{
-			Expected:      [32]byte{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60},
+			Expected:      []byte{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60},
 			ValidationOpt: measurements.WarnOnly,
 		},
 		5: measurements.Measurement{
-			Expected:      [32]byte{0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80},
+			Expected:      []byte{0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80},
 			ValidationOpt: measurements.WarnOnly,
 		},
 	}
@@ -202,7 +208,11 @@ func TestValidate(t *testing.T) {
 			validator: NewValidator(
 				measurements.M{
 					0: measurements.Measurement{
-						Expected:      [32]byte{0xFF},
+						Expected:      []byte{0xFF},
+						ValidationOpt: measurements.Enforce,
+					},
+					1: measurements.Measurement{
+						Expected:      []byte{0xFF},
 						ValidationOpt: measurements.Enforce,
 					},
 				},
@@ -212,6 +222,25 @@ func TestValidate(t *testing.T) {
 			attDoc:  mustMarshalAttestation(attDoc, require),
 			nonce:   nonce,
 			wantErr: true,
+		},
+		"untrusted WarnOnly PCRs": {
+			validator: NewValidator(
+				measurements.M{
+					0: measurements.Measurement{
+						Expected:      []byte{0xFF},
+						ValidationOpt: measurements.WarnOnly,
+					},
+					1: measurements.Measurement{
+						Expected:      []byte{0xFF},
+						ValidationOpt: measurements.WarnOnly,
+					},
+				},
+				fakeGetTrustedKey,
+				fakeValidateCVM,
+				logger.NewTest(t)),
+			attDoc:  mustMarshalAttestation(attDoc, require),
+			nonce:   nonce,
+			wantErr: false,
 		},
 		"no sha256 quote": {
 			validator: NewValidator(testExpectedPCRs, fakeGetTrustedKey, fakeValidateCVM, warnLog),
@@ -279,7 +308,7 @@ func TestFailIssuer(t *testing.T) {
 		"fail getAttestationKey": {
 			issuer: NewIssuer(
 				newSimTPMWithEventLog,
-				func(tpm io.ReadWriter) (*tpmclient.Key, error) {
+				func(_ io.ReadWriter) (*tpmclient.Key, error) {
 					return nil, errors.New("failure")
 				},
 				fakeGetInstanceInfo,
@@ -291,7 +320,7 @@ func TestFailIssuer(t *testing.T) {
 		"fail Attest": {
 			issuer: NewIssuer(
 				newSimTPMWithEventLog,
-				func(tpm io.ReadWriter) (*tpmclient.Key, error) {
+				func(_ io.ReadWriter) (*tpmclient.Key, error) {
 					return &tpmclient.Key{}, nil
 				},
 				fakeGetInstanceInfo,
@@ -397,6 +426,10 @@ func TestGetSHA256QuoteIndex(t *testing.T) {
 }
 
 func TestGetSelectedMeasurements(t *testing.T) {
+	cgo := os.Getenv("CGO_ENABLED")
+	if cgo == "0" {
+		t.Skip("skipping test because CGO is disabled and tpm simulator requires it")
+	}
 	testCases := map[string]struct {
 		openFunc     TPMOpenFunc
 		pcrSelection tpm2.PCRSelection
@@ -448,10 +481,10 @@ type testAttestationLogger struct {
 	warnings []string
 }
 
-func (w *testAttestationLogger) Infof(format string, args ...any) {
+func (w *testAttestationLogger) Info(format string, args ...any) {
 	w.infos = append(w.infos, fmt.Sprintf(format, args...))
 }
 
-func (w *testAttestationLogger) Warnf(format string, args ...any) {
+func (w *testAttestationLogger) Warn(format string, args ...any) {
 	w.warnings = append(w.warnings, fmt.Sprintf(format, args...))
 }

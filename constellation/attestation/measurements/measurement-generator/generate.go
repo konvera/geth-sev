@@ -9,7 +9,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -21,14 +20,16 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/konvera/geth-sev/constellation/api/versionsapi"
 	"github.com/konvera/geth-sev/constellation/attestation/measurements"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/cloud/cloudprovider"
-	"github.com/konvera/geth-sev/constellation/config"
 	"github.com/konvera/geth-sev/constellation/constants"
 	"github.com/konvera/geth-sev/constellation/sigstore"
-	"github.com/konvera/geth-sev/constellation/versionsapi"
+	"github.com/konvera/geth-sev/constellation/sigstore/keyselect"
 	"golang.org/x/tools/go/ast/astutil"
 )
 
@@ -36,14 +37,18 @@ import (
 // Measurements are embedded in the constellation cli.
 
 func main() {
-	defaultConf := config.Default()
-	log.Printf("Generating measurements for %s\n", defaultConf.Image)
+	const imageFilePath = "../../config/image_enterprise.go"
+	defaultImage, err := imageVersionFromFile(imageFilePath)
+	if err != nil {
+		log.Fatalf("error parsing image version from %s: %s", imageFilePath, err)
+	}
+	log.Printf("Generating measurements for %s\n", defaultImage)
 
-	const filePath = "./measurements_enterprise.go"
+	const outFilePath = "./measurements_enterprise.go"
 
 	ctx := context.Background()
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+	outFile, err := parser.ParseFile(fset, outFilePath, nil, parser.ParseComments)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,34 +59,34 @@ func main() {
 
 	var returnStmtCtr int
 
-	newFile := astutil.Apply(file, func(cursor *astutil.Cursor) bool {
+	newFile := astutil.Apply(outFile, func(cursor *astutil.Cursor) bool {
 		n := cursor.Node()
 
-		// find all switch cases for the CSPs of the form:
-		// switch provider {
-		// case cloudprovider.XYZ:
-		// 	return M{...}
+		// find all variables of the form <provider>_<variant> and replace them with updated measurements
+		// see ../measurements_enterprise.go for an example
 
-		if clause, ok := n.(*ast.CaseClause); ok && len(clause.List) > 0 && len(clause.Body) > 0 {
-			sel, ok := clause.List[0].(*ast.SelectorExpr)
+		if clause, ok := n.(*ast.ValueSpec); ok && len(clause.Names) == 1 && len(clause.Values) == 1 {
+			varName := clause.Names[0].Name
+			_, ok := clause.Values[0].(*ast.CompositeLit)
 			if !ok {
 				return true
 			}
-			returnStmt, ok := clause.Body[0].(*ast.ReturnStmt)
-			if !ok || len(returnStmt.Results) == 0 {
+
+			nameParts := strings.Split(varName, "_")
+			if len(nameParts) != 2 {
 				return true
 			}
-
-			provider := cloudprovider.FromString(sel.Sel.Name)
-			if provider == cloudprovider.Unknown {
-				log.Fatalf("unknown provider %s", sel.Sel.Name)
+			provider := cloudprovider.FromString(nameParts[0])
+			variant, err := attestationVariantFromGoIdentifier(nameParts[1])
+			if err != nil {
+				log.Fatalf("error parsing variant %s: %s", nameParts[1], err)
 			}
-			log.Println("Found", provider)
+			log.Println("Found", variant)
 			returnStmtCtr++
 			// retrieve and validate measurements for the given CSP and image
-			measuremnts := mustGetMeasurements(ctx, rekor, []byte(constants.CosignPublicKey), http.DefaultClient, provider, defaultConf.Image)
+			measurements := mustGetMeasurements(ctx, rekor, provider, variant, defaultImage)
 			// replace the return statement with a composite literal containing the validated measurements
-			returnStmt.Results[0] = measurementsCompositeLiteral(measuremnts)
+			clause.Values[0] = measurementsCompositeLiteral(measurements)
 		}
 		return true
 	}, nil,
@@ -95,85 +100,75 @@ func main() {
 	printConfig := printer.Config{Mode: printer.UseSpaces | printer.TabIndent, Tabwidth: 8}
 
 	if err = printConfig.Fprint(&buf, fset, newFile); err != nil {
-		log.Fatalf("error formatting file %s: %s", filePath, err)
+		log.Fatalf("error formatting file %s: %s", outFilePath, err)
 	}
-	if err := os.WriteFile(filePath, buf.Bytes(), 0o644); err != nil {
-		log.Fatalf("error writing file %s: %s", filePath, err)
+	if err := os.WriteFile(outFilePath, buf.Bytes(), 0o644); err != nil {
+		log.Fatalf("error writing file %s: %s", outFilePath, err)
 	}
 	log.Println("Successfully generated hashes.")
 }
 
 // mustGetMeasurements fetches the measurements for the given image and CSP and verifies them.
-func mustGetMeasurements(ctx context.Context, verifier rekorVerifier, cosignPublicKey []byte, client *http.Client, provider cloudprovider.Provider, image string) measurements.M {
-	measurementsURL, err := measurementURL(provider, image, "measurements.json")
+func mustGetMeasurements(ctx context.Context, verifier rekorVerifier, provider cloudprovider.Provider, attestationVariant variant.Variant, image string) measurements.M {
+	measurementsURL, err := measurementURL(image, constants.CDNMeasurementsFile)
 	if err != nil {
 		panic(err)
 	}
-	signatureURL, err := measurementURL(provider, image, "measurements.json.sig")
+	signatureURL, err := measurementURL(image, constants.CDNMeasurementsSignature)
 	if err != nil {
 		panic(err)
+	}
+
+	imageVersion, err := versionsapi.NewVersionFromShortPath(image, versionsapi.VersionKindImage)
+	if err != nil {
+		panic(err)
+	}
+
+	publicKey, err := keyselect.CosignPublicKeyForVersion(imageVersion)
+	if err != nil {
+		panic(fmt.Errorf("getting public key: %w", err))
+	}
+
+	cosignVerifier, err := sigstore.NewCosignVerifier(publicKey)
+	if err != nil {
+		panic(fmt.Errorf("creating cosign verifier: %w", err))
 	}
 
 	log.Println("Fetching measurements from", measurementsURL, "and signature from", signatureURL)
 	var fetchedMeasurements measurements.M
 	hash, err := fetchedMeasurements.FetchAndVerify(
-		ctx, client,
+		ctx, http.DefaultClient, cosignVerifier,
 		measurementsURL,
 		signatureURL,
-		cosignPublicKey,
-		measurements.WithMetadata{
-			CSP:   provider,
-			Image: image,
-		},
+		imageVersion,
+		provider,
+		attestationVariant,
 	)
 	if err != nil {
 		panic(err)
 	}
-	if err := verifyWithRekor(ctx, verifier, hash); err != nil {
+	if err := sigstore.VerifyWithRekor(ctx, publicKey, verifier, hash); err != nil {
 		panic(err)
 	}
 	return fetchedMeasurements
 }
 
 // measurementURL returns the URL for the measurements file for the given image and CSP.
-func measurementURL(provider cloudprovider.Provider, image, file string) (*url.URL, error) {
+func measurementURL(image, file string) (*url.URL, error) {
 	version, err := versionsapi.NewVersionFromShortPath(image, versionsapi.VersionKindImage)
 	if err != nil {
 		return nil, fmt.Errorf("parsing image name: %w", err)
 	}
 
 	return url.Parse(
-		version.ArtifactsURL() + path.Join("/image", "csp", strings.ToLower(provider.String()), file),
-	)
-}
-
-// verifyWithRekor verifies that the given hash is present in rekor and is valid.
-func verifyWithRekor(ctx context.Context, verifier rekorVerifier, hash string) error {
-	uuids, err := verifier.SearchByHash(ctx, hash)
-	if err != nil {
-		return fmt.Errorf("searching Rekor for hash: %w", err)
-	}
-
-	if len(uuids) == 0 {
-		return fmt.Errorf("no matching entries in Rekor")
-	}
-
-	// We expect the first entry in Rekor to be our original entry.
-	// SHA256 should ensure there is no entry with the same hash.
-	// Any subsequent hashes are treated as potential attacks and are ignored.
-	// Attacks on Rekor will be monitored from other backend services.
-	artifactUUID := uuids[0]
-
-	return verifier.VerifyEntry(
-		ctx, artifactUUID,
-		base64.StdEncoding.EncodeToString([]byte(constants.CosignPublicKey)),
+		version.ArtifactsURL(versionsapi.APIV2) + path.Join("/image", file),
 	)
 }
 
 // byteArrayCompositeLit returns a *ast.CompositeLit representing a byte array literal.
 // The returned literal is of the form:
-// [32]byte{ 0x01, 0x02, 0x03, ... }.
-func byteArrayCompositeLit(hex [32]byte) *ast.CompositeLit {
+// []byte{ 0x01, 0x02, 0x03, ... }.
+func byteArrayCompositeLit(hex []byte) *ast.CompositeLit {
 	var elts []ast.Expr
 	// create list of byte literals
 	for _, b := range hex {
@@ -183,10 +178,9 @@ func byteArrayCompositeLit(hex [32]byte) *ast.CompositeLit {
 		})
 	}
 	// create the composite literal
-	// containing the byte literals as part of an [32]byte array
+	// containing the byte literals as part of an []byte slice
 	return &ast.CompositeLit{
 		Type: &ast.ArrayType{
-			Len: ast.NewIdent("32"),
 			Elt: ast.NewIdent("byte"),
 		},
 		Elts: elts,
@@ -197,7 +191,7 @@ func byteArrayCompositeLit(hex [32]byte) *ast.CompositeLit {
 // The returned expression is of the form:
 //
 //	0: {
-//		  Expected: [32]byte{ 0x01, 0x02, 0x03, ... },
+//		  Expected: []byte{ 0x01, 0x02, 0x03, ... },
 //		  WarnOnly: false,
 //	},
 func measurementsEntryKeyValueExpr(pcr uint32, measuremnt measurements.Measurement) *ast.KeyValueExpr {
@@ -235,11 +229,11 @@ func measurementsEntryKeyValueExpr(pcr uint32, measuremnt measurements.Measureme
 //
 //	M{
 //		0: {
-//			Expected: [32]byte{ 0x01, 0x02, 0x03, ... },
+//			Expected: []byte{ 0x01, 0x02, 0x03, ... },
 //			WarnOnly: false,
 //		},
 //		1: {
-//			Expected: [32]byte{ 0x01, 0x02, 0x03, ... },
+//			Expected: []byte{ 0x01, 0x02, 0x03, ... },
 //			WarnOnly: false,
 //		},
 //		...
@@ -261,6 +255,73 @@ func measurementsCompositeLiteral(measurements measurements.M) *ast.CompositeLit
 		},
 		Elts: elts,
 	}
+}
+
+func attestationVariantFromGoIdentifier(identifier string) (variant.Variant, error) {
+	switch identifier {
+	case "Dummy":
+		return variant.Dummy{}, nil
+	case "AWSSEVSNP":
+		return variant.AWSSEVSNP{}, nil
+	case "AWSNitroTPM":
+		return variant.AWSNitroTPM{}, nil
+	case "GCPSEVES":
+		return variant.GCPSEVES{}, nil
+	case "GCPSEVSNP":
+		return variant.GCPSEVSNP{}, nil
+	case "AzureSEVSNP":
+		return variant.AzureSEVSNP{}, nil
+	case "AzureTDX":
+		return variant.AzureTDX{}, nil
+	case "AzureTrustedLaunch":
+		return variant.AzureTrustedLaunch{}, nil
+	case "QEMUVTPM":
+		return variant.QEMUVTPM{}, nil
+	case "QEMUTDX":
+		return variant.QEMUTDX{}, nil
+	}
+	return nil, fmt.Errorf("unknown identifier: %q", identifier)
+}
+
+func imageVersionFromFile(path string) (string, error) {
+	fset := token.NewFileSet()
+	imageFile, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var defaultImage string
+
+	_ = astutil.Apply(imageFile, func(cursor *astutil.Cursor) bool {
+		n := cursor.Node()
+
+		// find const of the form defaultImage = "<version>"
+
+		if clause, ok := n.(*ast.ValueSpec); ok && len(clause.Names) == 1 && len(clause.Values) == 1 {
+			constName := clause.Names[0].Name
+			constValue, ok := clause.Values[0].(*ast.BasicLit)
+			if !ok || constValue.Kind != token.STRING {
+				return true
+			}
+
+			if constName != "defaultImage" {
+				return true
+			}
+			unquoted, err := strconv.Unquote(constValue.Value)
+			if err != nil {
+				log.Printf("error parsing defaultImage: %s", err)
+				return true
+			}
+			defaultImage = unquoted
+		}
+		return true
+	}, nil,
+	)
+
+	if defaultImage == "" {
+		return "", fmt.Errorf("no defaultImage found")
+	}
+	return defaultImage, nil
 }
 
 type rekorVerifier interface {
