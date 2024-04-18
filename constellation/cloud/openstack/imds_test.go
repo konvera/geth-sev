@@ -26,7 +26,7 @@ func TestProviderID(t *testing.T) {
 	someErr := errors.New("failed")
 
 	type testCase struct {
-		cache      metadataResponse
+		cache      any
 		cacheTime  time.Time
 		newClient  httpClientJSONCreateFunc
 		wantResult string
@@ -34,7 +34,7 @@ func TestProviderID(t *testing.T) {
 		wantErr    bool
 	}
 
-	newTestCases := func(mResp1, mResp2 metadataResponse, expect1, expect2 string) map[string]testCase {
+	newTestCases := func(mResp1, mResp2 any, expect1, expect2 string) map[string]testCase {
 		return map[string]testCase{
 			"cached": {
 				cache:      mResp1,
@@ -43,30 +43,30 @@ func TestProviderID(t *testing.T) {
 				wantCall:   false,
 			},
 			"from http": {
-				newClient:  newStubHTTPClientJSONFunc(mResp1, nil),
+				newClient:  newStubHTTPClientJSONFunc(mResp1, 200, nil),
 				wantResult: expect1,
 				wantCall:   true,
 			},
 			"cache outdated": {
 				cache:      mResp1,
 				cacheTime:  time.Now().AddDate(0, 0, -1),
-				newClient:  newStubHTTPClientJSONFunc(mResp2, nil),
+				newClient:  newStubHTTPClientJSONFunc(mResp2, 200, nil),
 				wantResult: expect2,
 				wantCall:   true,
 			},
 			"cache empty": {
 				cacheTime:  time.Now(),
-				newClient:  newStubHTTPClientJSONFunc(mResp1, nil),
+				newClient:  newStubHTTPClientJSONFunc(mResp1, 200, nil),
 				wantResult: expect1,
 				wantCall:   true,
 			},
 			"http error": {
-				newClient: newStubHTTPClientJSONFunc(metadataResponse{}, someErr),
+				newClient: newStubHTTPClientJSONFunc(metadataResponse{}, 200, someErr),
 				wantCall:  true,
 				wantErr:   true,
 			},
 			"http empty response": {
-				newClient: newStubHTTPClientJSONFunc(metadataResponse{}, nil),
+				newClient: newStubHTTPClientJSONFunc(metadataResponse{}, 200, nil),
 				wantCall:  true,
 				wantErr:   true,
 			},
@@ -120,32 +120,32 @@ func TestProviderID(t *testing.T) {
 		"authURL": {
 			method: (*imdsClient).authURL,
 			testCases: newTestCases(
-				metadataResponse{Tags: metadataTags{AuthURL: "authURL1"}},
-				metadataResponse{Tags: metadataTags{AuthURL: "authURL2"}},
+				userDataResponse{AuthURL: "authURL1"},
+				userDataResponse{AuthURL: "authURL2"},
 				"authURL1", "authURL2",
 			),
 		},
 		"userDomainName": {
 			method: (*imdsClient).userDomainName,
 			testCases: newTestCases(
-				metadataResponse{Tags: metadataTags{UserDomainName: "userDomainName1"}},
-				metadataResponse{Tags: metadataTags{UserDomainName: "userDomainName2"}},
+				userDataResponse{UserDomainName: "userDomainName1"},
+				userDataResponse{UserDomainName: "userDomainName2"},
 				"userDomainName1", "userDomainName2",
 			),
 		},
 		"username": {
 			method: (*imdsClient).username,
 			testCases: newTestCases(
-				metadataResponse{Tags: metadataTags{Username: "username1"}},
-				metadataResponse{Tags: metadataTags{Username: "username2"}},
+				userDataResponse{Username: "username1"},
+				userDataResponse{Username: "username2"},
 				"username1", "username2",
 			),
 		},
 		"password": {
 			method: (*imdsClient).password,
 			testCases: newTestCases(
-				metadataResponse{Tags: metadataTags{Password: "password1"}},
-				metadataResponse{Tags: metadataTags{Password: "password2"}},
+				userDataResponse{Password: "password1"},
+				userDataResponse{Password: "password2"},
 				"password1", "password2",
 			),
 		},
@@ -162,10 +162,18 @@ func TestProviderID(t *testing.T) {
 					if tc.newClient != nil {
 						client = tc.newClient(require)
 					}
+					var cache metadataResponse
+					var userDataCache userDataResponse
+					if _, ok := tc.cache.(metadataResponse); ok {
+						cache = tc.cache.(metadataResponse)
+					} else if _, ok := tc.cache.(userDataResponse); ok {
+						userDataCache = tc.cache.(userDataResponse)
+					}
 					imds := &imdsClient{
-						client:    client,
-						cache:     tc.cache,
-						cacheTime: tc.cacheTime,
+						client:        client,
+						cache:         cache,
+						userDataCache: userDataCache,
+						cacheTime:     tc.cacheTime,
 					}
 
 					result, err := tu.method(imds, context.Background())
@@ -207,30 +215,35 @@ func TestRole(t *testing.T) {
 			wantCall:   false,
 		},
 		"from http": {
-			newClient:  newStubHTTPClientJSONFunc(mResp1, nil),
+			newClient:  newStubHTTPClientJSONFunc(mResp1, 200, nil),
 			wantResult: expect1,
 			wantCall:   true,
 		},
 		"cache outdated": {
 			cache:      mResp1,
 			cacheTime:  time.Now().AddDate(0, 0, -1),
-			newClient:  newStubHTTPClientJSONFunc(mResp2, nil),
+			newClient:  newStubHTTPClientJSONFunc(mResp2, 200, nil),
 			wantResult: expect2,
 			wantCall:   true,
 		},
 		"cache empty": {
 			cacheTime:  time.Now(),
-			newClient:  newStubHTTPClientJSONFunc(mResp1, nil),
+			newClient:  newStubHTTPClientJSONFunc(mResp1, 200, nil),
 			wantResult: expect1,
 			wantCall:   true,
 		},
 		"http error": {
-			newClient: newStubHTTPClientJSONFunc(metadataResponse{}, someErr),
+			newClient: newStubHTTPClientJSONFunc(metadataResponse{}, 200, someErr),
+			wantCall:  true,
+			wantErr:   true,
+		},
+		"http status code 500": {
+			newClient: newStubHTTPClientJSONFunc(metadataResponse{}, 500, nil),
 			wantCall:  true,
 			wantErr:   true,
 		},
 		"http empty response": {
-			newClient: newStubHTTPClientJSONFunc(metadataResponse{}, nil),
+			newClient: newStubHTTPClientJSONFunc(metadataResponse{}, 200, nil),
 			wantCall:  true,
 			wantErr:   true,
 		},
@@ -368,15 +381,17 @@ type httpClientJSONCreateFunc func(r *require.Assertions) *stubHTTPClientJSON
 
 type stubHTTPClientJSON struct {
 	require  *require.Assertions
-	response metadataResponse
+	response any
+	code     int
 	err      error
 	called   bool
 }
 
-func newStubHTTPClientJSONFunc(response metadataResponse, err error) httpClientJSONCreateFunc {
+func newStubHTTPClientJSONFunc(response any, statusCode int, err error) httpClientJSONCreateFunc {
 	return func(r *require.Assertions) *stubHTTPClientJSON {
 		return &stubHTTPClientJSON{
 			response: response,
+			code:     statusCode,
 			err:      err,
 			require:  r,
 		}
@@ -387,16 +402,26 @@ func (c *stubHTTPClientJSON) Do(_ *http.Request) (*http.Response, error) {
 	c.called = true
 	body, err := json.Marshal(c.response)
 	c.require.NoError(err)
-	return &http.Response{Body: io.NopCloser(bytes.NewReader(body))}, c.err
+	code := 200
+	if c.code != 0 {
+		code = c.code
+	}
+	return &http.Response{StatusCode: code, Status: http.StatusText(code), Body: io.NopCloser(bytes.NewReader(body))}, c.err
 }
 
 type stubHTTPClient struct {
 	response string
+	code     int
 	err      error
 	called   bool
 }
 
 func (c *stubHTTPClient) Do(_ *http.Request) (*http.Response, error) {
 	c.called = true
-	return &http.Response{Body: io.NopCloser(strings.NewReader(c.response))}, c.err
+	code := 200
+	if c.code != 0 {
+		code = c.code
+	}
+
+	return &http.Response{StatusCode: code, Status: http.StatusText(code), Body: io.NopCloser(strings.NewReader(c.response))}, c.err
 }

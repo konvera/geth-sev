@@ -11,25 +11,28 @@ import (
 
 	"github.com/konvera/geth-sev/constellation/role"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/servers"
+	"github.com/gophercloud/gophercloud/openstack/networking/v2/networks"
 	"github.com/gophercloud/gophercloud/openstack/networking/v2/subnets"
 	"github.com/gophercloud/gophercloud/pagination"
 )
 
 type stubIMDSClient struct {
-	providerIDResult     string
-	providerIDErr        error
-	nameResult           string
-	nameErr              error
-	projectIDResult      string
-	projectIDErr         error
-	uidResult            string
-	uidErr               error
-	initSecretHashResult string
-	initSecretHashErr    error
-	roleResult           role.Role
-	roleErr              error
-	vpcIPResult          string
-	vpcIPErr             error
+	providerIDResult           string
+	providerIDErr              error
+	nameResult                 string
+	nameErr                    error
+	projectIDResult            string
+	projectIDErr               error
+	uidResult                  string
+	uidErr                     error
+	initSecretHashResult       string
+	initSecretHashErr          error
+	roleResult                 role.Role
+	roleErr                    error
+	vpcIPResult                string
+	vpcIPErr                   error
+	loadBalancerEndpointResult string
+	loadBalancerEndpointErr    error
 }
 
 func (c *stubIMDSClient) providerID(_ context.Context) (string, error) {
@@ -60,13 +63,22 @@ func (c *stubIMDSClient) vpcIP(_ context.Context) (string, error) {
 	return c.vpcIPResult, c.vpcIPErr
 }
 
+func (c *stubIMDSClient) loadBalancerEndpoint(_ context.Context) (string, error) {
+	return c.loadBalancerEndpointResult, c.loadBalancerEndpointErr
+}
+
 type stubServersClient struct {
 	serversPager stubPager
+	netsPager    stubPager
 	subnetsPager stubPager
 }
 
 func (c *stubServersClient) ListServers(_ servers.ListOptsBuilder) pagerAPI {
 	return &c.serversPager
+}
+
+func (c *stubServersClient) ListNetworks(_ networks.ListOptsBuilder) pagerAPI {
+	return &c.netsPager
 }
 
 func (c *stubServersClient) ListSubnets(_ subnets.ListOpts) pagerAPI {

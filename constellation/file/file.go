@@ -14,10 +14,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
-	"path"
+	"path/filepath"
+	"strings"
 
 	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	"github.com/spf13/afero"
@@ -46,6 +48,8 @@ const (
 	optOverwrite
 	// OptMkdirAll creates the path to the file.
 	optMkdirAll
+	// OptAppend appends to the file.
+	optAppend
 )
 
 var (
@@ -55,6 +59,8 @@ var (
 	OptOverwrite = Option{optOverwrite}
 	// OptMkdirAll creates the path to the file.
 	OptMkdirAll = Option{optMkdirAll}
+	// OptAppend appends to the file.
+	OptAppend = Option{optAppend}
 )
 
 // Handler handles file interaction.
@@ -81,13 +87,16 @@ func (h *Handler) Read(name string) ([]byte, error) {
 // Write writes the data bytes into the file with the given name.
 func (h *Handler) Write(name string, data []byte, options ...Option) error {
 	if hasOption(options, OptMkdirAll) {
-		if err := h.fs.MkdirAll(path.Dir(name), os.ModePerm); err != nil {
+		if err := h.fs.MkdirAll(filepath.Dir(name), os.ModePerm); err != nil {
 			return err
 		}
 	}
 	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
 	if hasOption(options, OptOverwrite) {
 		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	if hasOption(options, OptAppend) {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_APPEND
 	}
 	file, err := h.fs.OpenFile(name, flags, 0o600)
 	if err != nil {
@@ -120,7 +129,7 @@ func (h *Handler) WriteJSON(name string, content any, options ...Option) error {
 }
 
 // ReadYAML reads a YAML file from name and unmarshals it into the content interface.
-// The interface content must be a pointer to a YAML marchalable object.
+// The interface content must be a pointer to a YAML marshalable object.
 func (h *Handler) ReadYAML(name string, content any) error {
 	return h.readYAML(name, content, false)
 }
@@ -174,4 +183,71 @@ func (h *Handler) Stat(name string) (fs.FileInfo, error) {
 // MkdirAll creates a directory path and all parents that does not exist yet.
 func (h *Handler) MkdirAll(name string) error {
 	return h.fs.MkdirAll(name, 0o700)
+}
+
+// CopyDir copies the src directory recursively into dst with the given options. OptMkdirAll
+// is always set. CopyDir does not follow symlinks.
+func (h *Handler) CopyDir(src, dst string, opts ...Option) error {
+	opts = append(opts, OptMkdirAll)
+	root := filepath.Join(src, string(filepath.Separator))
+
+	walkFunc := func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		pathWithoutRoot := strings.TrimPrefix(path, root)
+		return h.CopyFile(path, filepath.Join(dst, pathWithoutRoot), opts...)
+	}
+
+	return h.fs.Walk(src, walkFunc)
+}
+
+// CopyFile copies the file from src to dst with the given options, respecting file permissions.
+func (h *Handler) CopyFile(src, dst string, opts ...Option) error {
+	srcInfo, err := h.fs.Stat(src)
+	if err != nil {
+		return fmt.Errorf("stat source file: %w", err)
+	}
+
+	content, err := h.fs.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read source file: %w", err)
+	}
+
+	err = h.Write(dst, content, opts...)
+	if err != nil {
+		return fmt.Errorf("write destination file: %w", err)
+	}
+
+	err = h.fs.Chmod(dst, srcInfo.Mode())
+	if err != nil {
+		return fmt.Errorf("chmod destination file: %w", err)
+	}
+
+	return nil
+}
+
+// RenameFile renames a file, overwriting any existing file at the destination.
+func (h *Handler) RenameFile(old, new string) error {
+	return h.fs.Rename(old, new)
+}
+
+// IsEmpty returns true if the given directory is empty.
+func (h *Handler) IsEmpty(dirName string) (bool, error) {
+	f, err := h.fs.Open(dirName)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	_, err = f.Readdirnames(1)
+	if err == io.EOF {
+		return true, nil
+	}
+	return false, err
 }

@@ -15,12 +15,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/konvera/geth-sev/constellation/attestation"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/attestation/vtpm"
 	"github.com/konvera/geth-sev/constellation/config"
 	certutil "github.com/konvera/geth-sev/constellation/crypto"
-	"github.com/konvera/geth-sev/constellation/variant"
 	"github.com/google/go-tpm-tools/proto/attest"
-	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/legacy/tpm2"
 )
 
 // ameRoot is the AME root CA certificate used to sign Azure's AME Infra CA certificates.
@@ -35,7 +36,7 @@ type Validator struct {
 }
 
 // NewValidator initializes a new Azure validator with the provided PCR values.
-func NewValidator(cfg config.AzureTrustedLaunch, log vtpm.AttestationLogger) *Validator {
+func NewValidator(cfg *config.AzureTrustedLaunch, log attestation.Logger) *Validator {
 	rootPool := x509.NewCertPool()
 	rootPool.AddCert(ameRoot)
 	v := &Validator{roots: rootPool}

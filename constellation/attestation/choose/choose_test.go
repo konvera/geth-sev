@@ -10,8 +10,9 @@ import (
 	"encoding/asn1"
 	"testing"
 
+	"github.com/konvera/geth-sev/constellation/attestation/measurements"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/config"
-	"github.com/konvera/geth-sev/constellation/variant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,17 +22,26 @@ func TestIssuer(t *testing.T) {
 		variant variant.Variant
 		wantErr bool
 	}{
+		"aws-sev-snp": {
+			variant: variant.AWSSEVSNP{},
+		},
 		"aws-nitro-tpm": {
 			variant: variant.AWSNitroTPM{},
 		},
 		"azure-sev-snp": {
 			variant: variant.AzureSEVSNP{},
 		},
+		"azure-tdx": {
+			variant: variant.AzureTDX{},
+		},
 		"azure-trusted-launch": {
 			variant: variant.AzureTrustedLaunch{},
 		},
 		"gcp-sev-es": {
 			variant: variant.GCPSEVES{},
+		},
+		"gcp-sev-snp": {
+			variant: variant.GCPSEVSNP{},
 		},
 		"qemu-vtpm": {
 			variant: variant.QEMUVTPM{},
@@ -64,29 +74,35 @@ func TestIssuer(t *testing.T) {
 
 func TestValidator(t *testing.T) {
 	testCases := map[string]struct {
-		variant variant.Variant
+		cfg     config.AttestationCfg
 		wantErr bool
 	}{
 		"aws-nitro-tpm": {
-			variant: variant.AWSNitroTPM{},
+			cfg: &config.AWSNitroTPM{},
 		},
 		"azure-sev-snp": {
-			variant: variant.AzureSEVSNP{},
+			cfg: &config.AzureSEVSNP{},
+		},
+		"azure-tdx": {
+			cfg: &config.AzureTDX{},
 		},
 		"azure-trusted-launch": {
-			variant: variant.AzureTrustedLaunch{},
+			cfg: &config.AzureTrustedLaunch{},
 		},
 		"gcp-sev-es": {
-			variant: variant.GCPSEVES{},
+			cfg: &config.GCPSEVES{},
+		},
+		"gcp-sev-snp": {
+			cfg: &config.GCPSEVSNP{},
 		},
 		"qemu-vtpm": {
-			variant: variant.QEMUVTPM{},
+			cfg: &config.QEMUVTPM{},
 		},
 		"dummy": {
-			variant: variant.Dummy{},
+			cfg: &config.DummyCfg{},
 		},
 		"unknown": {
-			variant: unknownVariant{},
+			cfg:     unknownConfig{},
 			wantErr: true,
 		},
 	}
@@ -96,14 +112,14 @@ func TestValidator(t *testing.T) {
 			assert := assert.New(t)
 			require := require.New(t)
 
-			validator, err := Validator(tc.variant, nil, config.SNPFirmwareSignerConfig{}, nil)
+			validator, err := Validator(tc.cfg, nil)
 
 			if tc.wantErr {
 				assert.Error(err)
 				return
 			}
 			require.NoError(err)
-			assert.True(validator.OID().Equal(tc.variant.OID()))
+			assert.True(validator.OID().Equal(tc.cfg.GetVariant().OID()))
 		})
 	}
 }
@@ -121,3 +137,17 @@ func (unknownVariant) String() string {
 func (unknownVariant) Equal(other variant.Getter) bool {
 	return other.OID().Equal(unknownVariant{}.OID())
 }
+
+type unknownConfig struct{}
+
+func (unknownConfig) GetVariant() variant.Variant {
+	return unknownVariant{}
+}
+
+func (unknownConfig) GetMeasurements() measurements.M {
+	return nil
+}
+
+func (unknownConfig) SetMeasurements(measurements.M) {}
+
+func (unknownConfig) EqualTo(config.AttestationCfg) (bool, error) { return false, nil }

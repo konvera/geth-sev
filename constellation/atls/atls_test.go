@@ -15,14 +15,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/konvera/geth-sev/constellation/variant"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	goleak.VerifyTestMain(m, goleak.IgnoreAnyFunction("github.com/bazelbuild/rules_go/go/tools/bzltestutil.RegisterTimeoutHandler.func1"))
 }
 
 func TestTLSConfig(t *testing.T) {
@@ -142,7 +142,7 @@ func TestTLSConfig(t *testing.T) {
 			serverConfig, err := CreateAttestationServerTLSConfig(tc.serverIssuer, tc.serverValidators)
 			require.NoError(err)
 
-			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, "hello")
 			}))
 			server.TLS = serverConfig
@@ -196,7 +196,7 @@ func TestClientConnectionConcurrency(t *testing.T) {
 		serverCfg, err := CreateAttestationServerTLSConfig(NewFakeIssuer(variant.Dummy{}), NewFakeValidators(variant.Dummy{}))
 		require.NoError(err)
 
-		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "hello")
 		}))
 		server.TLS = serverCfg
@@ -270,7 +270,7 @@ func TestServerConnectionConcurrency(t *testing.T) {
 	require.NoError(err)
 
 	for i := 0; i < serverCount; i++ {
-		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "hello")
 		}))
 		server.TLS = serverCfg

@@ -12,13 +12,13 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/konvera/geth-sev/constellation/attestation"
+	"github.com/konvera/geth-sev/constellation/attestation/azure"
+	"github.com/konvera/geth-sev/constellation/attestation/snp"
+	"github.com/konvera/geth-sev/constellation/attestation/variant"
 	"github.com/konvera/geth-sev/constellation/attestation/vtpm"
-	"github.com/konvera/geth-sev/constellation/variant"
 	"github.com/edgelesssys/go-azguestattestation/maa"
-	tpmclient "github.com/google/go-tpm-tools/client"
 )
-
-const tpmAkIdx = 0x81000003
 
 // Issuer for Azure TPM attestation.
 type Issuer struct {
@@ -30,7 +30,7 @@ type Issuer struct {
 }
 
 // NewIssuer initializes a new Azure Issuer.
-func NewIssuer(log vtpm.AttestationLogger) *Issuer {
+func NewIssuer(log attestation.Logger) *Issuer {
 	i := &Issuer{
 		imds: newIMDSClient(),
 		maa:  newMAAClient(),
@@ -38,7 +38,7 @@ func NewIssuer(log vtpm.AttestationLogger) *Issuer {
 
 	i.Issuer = vtpm.NewIssuer(
 		vtpm.OpenVTPM,
-		getAttestationKey,
+		azure.GetAttestationKey,
 		i.getInstanceInfo,
 		log,
 	)
@@ -64,12 +64,14 @@ func (i *Issuer) getInstanceInfo(ctx context.Context, tpm io.ReadWriteCloser, us
 		}
 	}
 
-	instanceInfo := azureInstanceInfo{
-		Vcek:              params.VcekCert,
+	instanceInfo := snp.InstanceInfo{
+		ReportSigner:      params.VcekCert,
 		CertChain:         params.VcekChain,
 		AttestationReport: params.SNPReport,
-		RuntimeData:       params.RuntimeData,
-		MAAToken:          maaToken,
+		Azure: &snp.AzureInstanceInfo{
+			RuntimeData: params.RuntimeData,
+			MAAToken:    maaToken,
+		},
 	}
 	statement, err := json.Marshal(instanceInfo)
 	if err != nil {
@@ -77,16 +79,6 @@ func (i *Issuer) getInstanceInfo(ctx context.Context, tpm io.ReadWriteCloser, us
 	}
 
 	return statement, nil
-}
-
-// getAttestationKey reads the attestation key put into the TPM during early boot.
-func getAttestationKey(tpm io.ReadWriter) (*tpmclient.Key, error) {
-	ak, err := tpmclient.LoadCachedKey(tpm, tpmAkIdx)
-	if err != nil {
-		return nil, fmt.Errorf("reading HCL attestation key from TPM: %w", err)
-	}
-
-	return ak, nil
 }
 
 type imdsAPI interface {

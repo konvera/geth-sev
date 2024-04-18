@@ -8,65 +8,60 @@ package components
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/edgelesssys/constellation/v2/bootstrapper/initproto"
-	"github.com/edgelesssys/constellation/v2/joinservice/joinproto"
 )
 
-// Component is a Kubernetes component.
-type Component struct {
-	URL         string
-	Hash        string
-	InstallPath string
-	Extract     bool
-}
-
 // Components is a list of Kubernetes components.
-type Components []Component
+type Components []*Component
 
-// NewComponentsFromInitProto converts a protobuf KubernetesVersion to Components.
-func NewComponentsFromInitProto(protoComponents []*initproto.KubernetesComponent) Components {
-	components := Components{}
-	for _, protoComponent := range protoComponents {
-		if protoComponent == nil {
-			continue
+type legacyComponent struct {
+	URL         string `json:"URL,omitempty"`
+	Hash        string `json:"Hash,omitempty"`
+	InstallPath string `json:"InstallPath,omitempty"`
+	Extract     bool   `json:"Extract,omitempty"`
+}
+
+// UnmarshalJSON implements a custom JSON unmarshaler to ensure backwards compatibility
+// with older components lists which had a different format for all keys.
+func (c *Components) UnmarshalJSON(b []byte) error {
+	var legacyComponents []*legacyComponent
+	if err := json.Unmarshal(b, &legacyComponents); err != nil {
+		return err
+	}
+	var components []*Component
+	if err := json.Unmarshal(b, &components); err != nil {
+		return err
+	}
+
+	if len(legacyComponents) != len(components) {
+		return errors.New("failed to unmarshal data: inconsistent number of components in list") // just a check, should never happen
+	}
+
+	// If a value is not set in the new format,
+	// it might have been set in the old format.
+	// In this case, we copy the value from the old format.
+	comps := make(Components, len(components))
+	for idx := 0; idx < len(components); idx++ {
+		comps[idx] = components[idx]
+		if comps[idx].Url == "" {
+			comps[idx].Url = legacyComponents[idx].URL
 		}
-		components = append(components, Component{URL: protoComponent.Url, Hash: protoComponent.Hash, InstallPath: protoComponent.InstallPath, Extract: protoComponent.Extract})
-	}
-	return components
-}
-
-// NewComponentsFromJoinProto converts a protobuf KubernetesVersion to Components.
-func NewComponentsFromJoinProto(protoComponents []*joinproto.KubernetesComponent) Components {
-	components := Components{}
-	for _, protoComponent := range protoComponents {
-		if protoComponent == nil {
-			continue
+		if comps[idx].Hash == "" {
+			comps[idx].Hash = legacyComponents[idx].Hash
 		}
-		components = append(components, Component{URL: protoComponent.Url, Hash: protoComponent.Hash, InstallPath: protoComponent.InstallPath, Extract: protoComponent.Extract})
+		if comps[idx].InstallPath == "" {
+			comps[idx].InstallPath = legacyComponents[idx].InstallPath
+		}
+		if !comps[idx].Extract {
+			comps[idx].Extract = legacyComponents[idx].Extract
+		}
 	}
-	return components
-}
 
-// ToInitProto converts Components to a protobuf KubernetesVersion.
-func (c Components) ToInitProto() []*initproto.KubernetesComponent {
-	protoComponents := []*initproto.KubernetesComponent{}
-	for _, component := range c {
-		protoComponents = append(protoComponents, &initproto.KubernetesComponent{Url: component.URL, Hash: component.Hash, InstallPath: component.InstallPath, Extract: component.Extract})
-	}
-	return protoComponents
-}
-
-// ToJoinProto converts Components to a protobuf KubernetesVersion.
-func (c Components) ToJoinProto() []*joinproto.KubernetesComponent {
-	protoComponents := []*joinproto.KubernetesComponent{}
-	for _, component := range c {
-		protoComponents = append(protoComponents, &joinproto.KubernetesComponent{Url: component.URL, Hash: component.Hash, InstallPath: component.InstallPath, Extract: component.Extract})
-	}
-	return protoComponents
+	*c = comps
+	return nil
 }
 
 // GetHash returns the hash over all component hashes.
@@ -80,11 +75,22 @@ func (c Components) GetHash() string {
 }
 
 // GetKubeadmComponent returns the kubeadm component.
-func (c Components) GetKubeadmComponent() (Component, error) {
+func (c Components) GetKubeadmComponent() (*Component, error) {
 	for _, component := range c {
-		if strings.Contains(component.URL, "kubeadm") {
+		if strings.Contains(component.GetUrl(), "kubeadm") {
 			return component, nil
 		}
 	}
-	return Component{}, errors.New("kubeadm component not found")
+	return nil, errors.New("kubeadm component not found")
+}
+
+// GetUpgradableComponents returns only those Components that should be passed to the upgrade-agent.
+func (c Components) GetUpgradableComponents() Components {
+	var cs Components
+	for _, c := range c {
+		if strings.HasPrefix(c.Url, "data:") || strings.HasSuffix(c.InstallPath, "kubeadm") {
+			cs = append(cs, c)
+		}
+	}
+	return cs
 }
