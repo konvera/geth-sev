@@ -8,6 +8,6 @@ go_library(
         "vlek.pem",
         "report.txt",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/aws/snp/testdata",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/aws/snp/testdata",
     visibility = ["//:__subpackages__"],
 )

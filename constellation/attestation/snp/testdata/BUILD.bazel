@@ -12,6 +12,6 @@ go_library(
         "vlek.pem",
         "vlekcertchain.pem",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/snp/testdata",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/snp/testdata",
     visibility = ["//:__subpackages__"],
 )

@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "choose",
     srcs = ["choose.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/choose",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/choose",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/atls",

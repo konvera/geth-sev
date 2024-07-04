@@ -8,7 +8,7 @@ go_library(
         "trustedlaunch.go",
         "validator.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/azure/trustedlaunch",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/azure/trustedlaunch",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation",

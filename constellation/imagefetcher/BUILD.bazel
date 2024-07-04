@@ -7,7 +7,7 @@ go_library(
         "imagefetcher.go",
         "raw.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/imagefetcher",
+    importpath = "github.com/konvera/geth-sev/constellation/imagefetcher",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/api/fetcher",

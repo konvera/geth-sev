@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "measurement-generator_lib",
     srcs = ["generate.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/measurements/measurement-generator",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/measurements/measurement-generator",
     visibility = ["//visibility:private"],
     deps = [
         "//internal/api/versionsapi",

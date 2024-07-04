@@ -8,11 +8,11 @@ go_library(
         "levelhandler.go",
         "log.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/logger",
+    importpath = "github.com/konvera/geth-sev/constellation/logger",
     visibility = ["//:__subpackages__"],
     deps = [
         "@com_github_grpc_ecosystem_go_grpc_middleware_v2//interceptors/logging",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//grpclog",
     ],
 )

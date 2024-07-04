@@ -9,7 +9,7 @@ go_library(
         "azureshared.go",
         "metadata.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/cloud/azureshared",
+    importpath = "github.com/konvera/geth-sev/constellation/cloud/azureshared",
     visibility = ["//:__subpackages__"],
 )
 

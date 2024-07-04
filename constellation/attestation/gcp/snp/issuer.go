@@ -21,7 +21,6 @@ import (
 	"github.com/konvera/geth-sev/constellation/attestation/vtpm"
 
 	"github.com/google/go-sev-guest/abi"
-	sevclient "github.com/google/go-sev-guest/client"
 	"github.com/google/go-tpm-tools/client"
 	tpmclient "github.com/google/go-tpm-tools/client"
 	"github.com/google/go-tpm-tools/proto/attest"
@@ -58,20 +57,14 @@ func getAttestationKey(tpm io.ReadWriter) (*tpmclient.Key, error) {
 // getInstanceInfo generates an extended SNP report, i.e. the report and any loaded certificates.
 // Report generation is triggered by sending ioctl syscalls to the SNP guest device, the AMD PSP generates the report.
 // The returned bytes will be written into the attestation document.
-func getInstanceInfo(_ context.Context, _ io.ReadWriteCloser, extraData []byte) ([]byte, error) {
+func getInstanceInfo(ctx context.Context, _ io.ReadWriteCloser, extraData []byte) ([]byte, error) {
 	if len(extraData) > 64 {
 		return nil, fmt.Errorf("extra data too long: %d, should be 64 bytes at most", len(extraData))
 	}
 	var extraData64 [64]byte
 	copy(extraData64[:], extraData)
 
-	device, err := sevclient.OpenDevice()
-	if err != nil {
-		return nil, fmt.Errorf("opening sev device: %w", err)
-	}
-	defer device.Close()
-
-	report, certs, err := sevclient.GetRawExtendedReportAtVmpl(device, extraData64, 0)
+	report, certs, err := snp.GetExtendedReport(extraData64)
 	if err != nil {
 		return nil, fmt.Errorf("getting extended report: %w", err)
 	}
@@ -81,7 +74,7 @@ func getInstanceInfo(_ context.Context, _ io.ReadWriteCloser, extraData []byte) 
 		return nil, fmt.Errorf("parsing vcek: %w", err)
 	}
 
-	gceInstanceInfo, err := gceInstanceInfo()
+	gceInstanceInfo, err := gceInstanceInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting GCE instance info: %w", err)
 	}
@@ -100,20 +93,20 @@ func getInstanceInfo(_ context.Context, _ io.ReadWriteCloser, extraData []byte) 
 }
 
 // gceInstanceInfo returns the instance info for a GCE instance from the metadata API.
-func gceInstanceInfo() (*attest.GCEInstanceInfo, error) {
+func gceInstanceInfo(ctx context.Context) (*attest.GCEInstanceInfo, error) {
 	c := gcp.MetadataClient{}
 
-	instanceName, err := c.InstanceName()
+	instanceName, err := c.InstanceName(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting instance name: %w", err)
 	}
 
-	projectID, err := c.ProjectID()
+	projectID, err := c.ProjectID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting project ID: %w", err)
 	}
 
-	zone, err := c.Zone()
+	zone, err := c.Zone(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting zone: %w", err)
 	}

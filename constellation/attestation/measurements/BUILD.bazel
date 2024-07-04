@@ -12,7 +12,7 @@ go_library(
         "measurements_oss.go",
         "overrides.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/measurements",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/measurements",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/api/versionsapi",

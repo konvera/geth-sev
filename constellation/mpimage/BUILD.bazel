@@ -7,7 +7,7 @@ go_library(
         "mpimage.go",
         "uri.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/mpimage",
+    importpath = "github.com/konvera/geth-sev/constellation/mpimage",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/cloud/cloudprovider",

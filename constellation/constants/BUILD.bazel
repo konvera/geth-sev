@@ -9,7 +9,7 @@ go_library(
         # keep
         "oss.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/constants",
+    importpath = "github.com/konvera/geth-sev/constellation/constants",
     visibility = ["//:__subpackages__"],
     x_defs = {
         "commit": "{STABLE_STAMP_COMMIT}",

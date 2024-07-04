@@ -7,7 +7,7 @@ go_library(
         "maa.go",
         "patch.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/maa",
+    importpath = "github.com/konvera/geth-sev/constellation/maa",
     visibility = ["//:__subpackages__"],
     deps = [
         "@com_github_azure_azure_sdk_for_go//profiles/latest/attestation/attestation",

@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "setup",
     srcs = ["setup.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/kms/setup",
+    importpath = "github.com/konvera/geth-sev/constellation/kms/setup",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/kms/kms",

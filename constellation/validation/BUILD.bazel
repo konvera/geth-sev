@@ -8,7 +8,7 @@ go_library(
         "errors.go",
         "validation.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/validation",
+    importpath = "github.com/konvera/geth-sev/constellation/validation",
     visibility = ["//:__subpackages__"],
 )
 

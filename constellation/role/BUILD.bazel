@@ -7,7 +7,7 @@ go_library(
         "role.go",
         "role_string.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/role",
+    importpath = "github.com/konvera/geth-sev/constellation/role",
     visibility = ["//:__subpackages__"],
 )
 

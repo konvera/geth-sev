@@ -8,7 +8,7 @@ go_library(
     name = "components",
     srcs = ["components.go"],
     embed = [":components_go_proto"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/versions/components",
+    importpath = "github.com/konvera/geth-sev/constellation/versions/components",
     visibility = ["//:__subpackages__"],
 )
 
@@ -20,7 +20,7 @@ proto_library(
 
 go_proto_library(
     name = "components_go_proto",
-    importpath = "github.com/edgelesssys/constellation/v2/internal/versions/components",
+    importpath = "github.com/konvera/geth-sev/constellation/versions/components",
     proto = ":components_proto",
     visibility = ["//:__subpackages__"],
 )

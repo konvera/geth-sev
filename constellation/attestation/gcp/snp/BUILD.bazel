@@ -7,7 +7,7 @@ go_library(
         "snp.go",
         "validator.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/gcp/snp",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/gcp/snp",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation",
@@ -17,7 +17,6 @@ go_library(
         "//internal/attestation/vtpm",
         "//internal/config",
         "@com_github_google_go_sev_guest//abi",
-        "@com_github_google_go_sev_guest//client",
         "@com_github_google_go_sev_guest//kds",
         "@com_github_google_go_sev_guest//proto/sevsnp",
         "@com_github_google_go_sev_guest//validate",

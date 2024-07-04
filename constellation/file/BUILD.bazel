@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "file",
     srcs = ["file.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/file",
+    importpath = "github.com/konvera/geth-sev/constellation/file",
     visibility = ["//:__subpackages__"],
     deps = [
         "@com_github_siderolabs_talos_pkg_machinery//config/encoder",

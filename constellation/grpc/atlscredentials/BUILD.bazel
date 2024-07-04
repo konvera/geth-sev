@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "atlscredentials",
     srcs = ["atlscredentials.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/grpc/atlscredentials",
+    importpath = "github.com/konvera/geth-sev/constellation/grpc/atlscredentials",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/atls",
@@ -21,7 +21,7 @@ go_test(
         "//internal/atls",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//test/bufconn",
         "@org_uber_go_goleak//:goleak",
     ],

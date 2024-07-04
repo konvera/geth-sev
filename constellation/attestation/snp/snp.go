@@ -12,21 +12,45 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 
 	"github.com/konvera/geth-sev/constellation/attestation"
 	"github.com/google/go-sev-guest/abi"
+	"github.com/google/go-sev-guest/client"
 	"github.com/google/go-sev-guest/kds"
 	spb "github.com/google/go-sev-guest/proto/sevsnp"
 	"github.com/google/go-sev-guest/verify/trust"
 	"github.com/google/go-tpm-tools/proto/attest"
 )
 
+var errNoPemBlocks = errors.New("no PEM blocks found")
+
 // Product returns the SEV product info currently supported by Constellation's SNP attestation.
 func Product() *spb.SevProduct {
 	// sevProduct is the product info of the SEV platform as reported through CPUID[EAX=1].
 	// It may become necessary in the future to differentiate among CSP vendors.
 	return &spb.SevProduct{Name: spb.SevProduct_SEV_PRODUCT_MILAN, Stepping: 0} // Milan-B0
+}
+
+// GetExtendedReport retrieves the extended SNP report from the CVM.
+func GetExtendedReport(reportData [64]byte) (report, certChain []byte, err error) {
+	qp, err := client.GetLeveledQuoteProvider()
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting quote provider: %w", err)
+	}
+	quote, err := qp.GetRawQuoteAtLevel(reportData, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting extended report: %w", err)
+	}
+
+	// Parse the report and certificate chain from the quote.
+	report = quote
+	if len(quote) > abi.ReportSize {
+		report = quote[:abi.ReportSize]
+		certChain = quote[abi.ReportSize:]
+	}
+	return report, certChain, nil
 }
 
 // InstanceInfo contains the necessary information to establish trust in a SNP CVM.
@@ -107,7 +131,7 @@ func (a *InstanceInfo) AttestationWithCerts(getter trust.HTTPSGetter,
 		return nil, fmt.Errorf("converting report to proto: %w", err)
 	}
 
-	productName := kds.ProductString(Product())
+	productName := kds.ProductLine(Product())
 
 	att := &spb.Attestation{
 		Report:           report,
@@ -124,7 +148,7 @@ func (a *InstanceInfo) AttestationWithCerts(getter trust.HTTPSGetter,
 	// If a certificate chain was pre-fetched by the Issuer, parse it and format it.
 	// Make sure to only use the ask, since using an ark from the Issuer would invalidate security guarantees.
 	ask, _, err := a.ParseCertChain()
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoPemBlocks) {
 		logger.Warn(fmt.Sprintf("Error parsing certificate chain: %v", err))
 	}
 	if ask != nil {
@@ -222,7 +246,7 @@ func (a *InstanceInfo) ParseCertChain() (ask, ark *x509.Certificate, retErr erro
 
 	switch {
 	case i == 1:
-		retErr = fmt.Errorf("no PEM blocks found")
+		retErr = errNoPemBlocks
 	case len(rest) != 0:
 		retErr = fmt.Errorf("remaining PEM block is not a valid certificate: %s", rest)
 	}

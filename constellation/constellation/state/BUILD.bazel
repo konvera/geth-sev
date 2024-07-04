@@ -7,7 +7,7 @@ go_library(
         "state.go",
         "state_doc.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/constellation/state",
+    importpath = "github.com/konvera/geth-sev/constellation/constellation/state",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation/variant",

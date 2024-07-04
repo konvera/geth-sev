@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "hash-generator_lib",
     srcs = ["generate.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/versions/hash-generator",
+    importpath = "github.com/konvera/geth-sev/constellation/versions/hash-generator",
     visibility = ["//visibility:private"],
     deps = [
         "@com_github_regclient_regclient//:regclient",

@@ -6,7 +6,7 @@ go_library(
         "clouds.go",
         "read.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/cloud/openstack/clouds",
+    importpath = "github.com/konvera/geth-sev/constellation/cloud/openstack/clouds",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/file",

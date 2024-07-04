@@ -9,7 +9,7 @@ go_library(
         "staticupload.go",
         "upload.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/staticupload",
+    importpath = "github.com/konvera/geth-sev/constellation/staticupload",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/constants",

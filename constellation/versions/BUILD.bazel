@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "versions",
     srcs = ["versions.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/versions",
+    importpath = "github.com/konvera/geth-sev/constellation/versions",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/compatibility",

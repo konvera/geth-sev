@@ -8,7 +8,7 @@ go_library(
         "nitrotpm.go",
         "validator.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/aws/nitrotpm",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/aws/nitrotpm",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation",

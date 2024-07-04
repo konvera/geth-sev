@@ -9,7 +9,7 @@ go_library(
         "marshal.go",
         "secrets.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/kubernetes",
+    importpath = "github.com/konvera/geth-sev/constellation/kubernetes",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/constants",

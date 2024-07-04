@@ -7,7 +7,7 @@ go_library(
         "metadata.go",
         "restclient.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/gcp",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/gcp",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation/snp",

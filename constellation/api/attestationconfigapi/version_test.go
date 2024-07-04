@@ -14,23 +14,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSEVSNPVersionListMarshalUnmarshalJSON(t *testing.T) {
+func TestVersionListMarshalUnmarshalJSON(t *testing.T) {
 	tests := map[string]struct {
-		input    SEVSNPVersionList
-		output   SEVSNPVersionList
+		input    List
+		output   List
 		wantDiff bool
 	}{
 		"success": {
-			input:  SEVSNPVersionList{list: []string{"v1", "v2"}},
-			output: SEVSNPVersionList{list: []string{"v1", "v2"}},
+			input:  List{List: []string{"v1", "v2"}},
+			output: List{List: []string{"v1", "v2"}},
 		},
 		"variant is lost": {
-			input:  SEVSNPVersionList{list: []string{"v1", "v2"}, variant: variant.AzureSEVSNP{}},
-			output: SEVSNPVersionList{list: []string{"v1", "v2"}},
+			input:  List{List: []string{"v1", "v2"}, Variant: variant.AzureSEVSNP{}},
+			output: List{List: []string{"v1", "v2"}},
 		},
 		"wrong order": {
-			input:    SEVSNPVersionList{list: []string{"v1", "v2"}},
-			output:   SEVSNPVersionList{list: []string{"v2", "v1"}},
+			input:    List{List: []string{"v1", "v2"}},
+			output:   List{List: []string{"v2", "v1"}},
 			wantDiff: true,
 		},
 	}
@@ -40,7 +40,7 @@ func TestSEVSNPVersionListMarshalUnmarshalJSON(t *testing.T) {
 			inputRaw, err := tc.input.MarshalJSON()
 			require.NoError(t, err)
 
-			var actual SEVSNPVersionList
+			var actual List
 			err = actual.UnmarshalJSON(inputRaw)
 			require.NoError(t, err)
 
@@ -53,7 +53,7 @@ func TestSEVSNPVersionListMarshalUnmarshalJSON(t *testing.T) {
 	}
 }
 
-func TestSEVSNPVersionListAddVersion(t *testing.T) {
+func TestVersionListAddVersion(t *testing.T) {
 	tests := map[string]struct {
 		versions []string
 		new      string
@@ -68,10 +68,10 @@ func TestSEVSNPVersionListAddVersion(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			v := SEVSNPVersionList{list: tc.versions}
-			v.addVersion(tc.new)
+			v := List{List: tc.versions}
+			v.AddVersion(tc.new)
 
-			assert.Equal(t, tc.expected, v.list)
+			assert.Equal(t, tc.expected, v.List)
 		})
 	}
 }

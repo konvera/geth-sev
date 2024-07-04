@@ -7,6 +7,6 @@ go_library(
         "azure.go",
         "gcp.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/config/disktypes",
+    importpath = "github.com/konvera/geth-sev/constellation/config/disktypes",
     visibility = ["//:__subpackages__"],
 )

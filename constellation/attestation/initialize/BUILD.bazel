@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "initialize",
     srcs = ["initialize.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/initialize",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/initialize",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation/measurements",

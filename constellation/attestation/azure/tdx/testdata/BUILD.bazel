@@ -4,6 +4,6 @@ go_library(
     name = "testdata",
     srcs = ["testdata.go"],
     embedsrcs = ["hclreport.bin"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/azure/tdx/testdata",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/azure/tdx/testdata",
     visibility = ["//:__subpackages__"],
 )

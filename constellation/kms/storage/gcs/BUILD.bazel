@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "gcs",
     srcs = ["gcs.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/kms/storage/gcs",
+    importpath = "github.com/konvera/geth-sev/constellation/kms/storage/gcs",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/kms/storage",

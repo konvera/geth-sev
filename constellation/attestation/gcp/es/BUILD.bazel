@@ -8,7 +8,7 @@ go_library(
         "issuer.go",
         "validator.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/gcp/es",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/gcp/es",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation",

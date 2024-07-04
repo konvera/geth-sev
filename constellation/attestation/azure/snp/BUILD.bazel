@@ -10,7 +10,7 @@ go_library(
         "snp.go",
         "validator.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/azure/snp",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/azure/snp",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation",

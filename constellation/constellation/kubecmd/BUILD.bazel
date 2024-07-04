@@ -8,7 +8,7 @@ go_library(
         "kubecmd.go",
         "status.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/constellation/kubecmd",
+    importpath = "github.com/konvera/geth-sev/constellation/constellation/kubecmd",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation/variant",

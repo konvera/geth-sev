@@ -7,7 +7,7 @@ go_library(
         "secureboot.go",
         "zlibdict.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/osimage/secureboot",
+    importpath = "github.com/konvera/geth-sev/constellation/osimage/secureboot",
     visibility = ["//:__subpackages__"],
     deps = ["@com_github_spf13_afero//:afero"],
 )

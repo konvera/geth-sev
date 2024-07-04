@@ -7,7 +7,7 @@ go_library(
         "qemu.go",
         "validator.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/qemu",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/qemu",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation",

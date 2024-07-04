@@ -11,7 +11,7 @@ go_library(
         "file.go",
         "license.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/license",
+    importpath = "github.com/konvera/geth-sev/constellation/license",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/cloud/cloudprovider",

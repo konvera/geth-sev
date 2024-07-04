@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "semver",
     srcs = ["semver.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/semver",
+    importpath = "github.com/konvera/geth-sev/constellation/semver",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/compatibility",

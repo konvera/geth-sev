@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "uri",
     srcs = ["uri.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/kms/uri",
+    importpath = "github.com/konvera/geth-sev/constellation/kms/uri",
     visibility = ["//:__subpackages__"],
 )
 

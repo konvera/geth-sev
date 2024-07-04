@@ -131,7 +131,7 @@ func getCertChain(cfg config.AttestationCfg) ([]byte, error) {
 	}
 
 	if awsCfg.AMDSigningKey.Equal(config.Certificate{}) {
-		certs, err := trust.GetProductChain(kds.ProductString(snp.Product()), abi.VlekReportSigner, trust.DefaultHTTPSGetter())
+		certs, err := trust.GetProductChain(kds.ProductLine(snp.Product()), abi.VlekReportSigner, trust.DefaultHTTPSGetter())
 		if err != nil {
 			return nil, fmt.Errorf("getting product certificate chain: %w", err)
 		}
@@ -157,7 +157,7 @@ func getCertChain(cfg config.AttestationCfg) ([]byte, error) {
 	return certChain, nil
 }
 
-// FormatString builds a string representation of a report that is inteded for console output.
+// FormatString builds a string representation of a report that is intended for console output.
 func (r *Report) FormatString(b *strings.Builder) (string, error) {
 	if len(r.ReportSigner) != 1 {
 		return "", fmt.Errorf("expected exactly one report signing certificate, found %d", len(r.ReportSigner))

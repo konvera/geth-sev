@@ -12,7 +12,7 @@ go_library(
         "@//nix/cc:cryptsetup",
     ],
     cgo = True,
-    importpath = "github.com/edgelesssys/constellation/v2/internal/cryptsetup",
+    importpath = "github.com/konvera/geth-sev/constellation/cryptsetup",
     visibility = ["//:__subpackages__"],
     deps = select({
         "@io_bazel_rules_go//go/platform:android": [

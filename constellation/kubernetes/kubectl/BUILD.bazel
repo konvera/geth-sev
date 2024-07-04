@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "kubectl",
     srcs = ["kubectl.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/kubernetes/kubectl",
+    importpath = "github.com/konvera/geth-sev/constellation/kubernetes/kubectl",
     visibility = ["//:__subpackages__"],
     deps = [
         "@io_k8s_api//core/v1:core",

@@ -11,7 +11,7 @@ go_library(
         "plumbing.go",
         "wrappers.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/cloud/openstack",
+    importpath = "github.com/konvera/geth-sev/constellation/cloud/openstack",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/cloud",

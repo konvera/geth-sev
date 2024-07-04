@@ -7,7 +7,7 @@ go_library(
         "cloudprovider.go",
         "provider_string.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/cloud/cloudprovider",
+    importpath = "github.com/konvera/geth-sev/constellation/cloud/cloudprovider",
     visibility = ["//:__subpackages__"],
 )
 

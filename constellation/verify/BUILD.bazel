@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "verify",
     srcs = ["verify.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/verify",
+    importpath = "github.com/konvera/geth-sev/constellation/verify",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation/snp",

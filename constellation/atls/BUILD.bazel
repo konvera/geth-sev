@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "atls",
     srcs = ["atls.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/atls",
+    importpath = "github.com/konvera/geth-sev/constellation/atls",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation/variant",

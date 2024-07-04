@@ -7,7 +7,7 @@ go_library(
         "tdx.go",
         "validator.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/attestation/tdx",
+    importpath = "github.com/konvera/geth-sev/constellation/attestation/tdx",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/attestation",

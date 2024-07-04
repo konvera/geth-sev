@@ -89,14 +89,17 @@ type Config struct {
 	//   The Kubernetes Service CIDR to be used for the cluster. This value will only be used during the first initialization of the Constellation.
 	ServiceCIDR string `yaml:"serviceCIDR" validate:"omitempty,cidrv4"`
 	// description: |
+	//   Additional tags that are applied to created resources.
+	Tags cloudprovider.Tags `yaml:"tags" validate:"omitempty"`
+	// description: |
 	//   Supported cloud providers and their specific configurations.
-	Provider ProviderConfig `yaml:"provider" validate:"dive"`
+	Provider ProviderConfig `yaml:"provider"`
 	// description: |
 	//   Node groups to be created in the cluster.
 	NodeGroups map[string]NodeGroup `yaml:"nodeGroups" validate:"required,dive"`
 	// description: |
 	//   Configuration for attestation validation. This configuration provides sensible defaults for the Constellation version it was created for.\nSee the docs for an overview on attestation: https://docs.edgeless.systems/constellation/architecture/attestation
-	Attestation AttestationConfig `yaml:"attestation" validate:"dive"`
+	Attestation AttestationConfig `yaml:"attestation"`
 }
 
 // ProviderConfig are cloud-provider specific configuration values used by the CLI.
@@ -105,19 +108,19 @@ type Config struct {
 type ProviderConfig struct {
 	// description: |
 	//   Configuration for AWS as provider.
-	AWS *AWSConfig `yaml:"aws,omitempty" validate:"omitempty,dive"`
+	AWS *AWSConfig `yaml:"aws,omitempty" validate:"omitempty"`
 	// description: |
 	//   Configuration for Azure as provider.
-	Azure *AzureConfig `yaml:"azure,omitempty" validate:"omitempty,dive"`
+	Azure *AzureConfig `yaml:"azure,omitempty" validate:"omitempty"`
 	// description: |
 	//   Configuration for Google Cloud as provider.
-	GCP *GCPConfig `yaml:"gcp,omitempty" validate:"omitempty,dive"`
+	GCP *GCPConfig `yaml:"gcp,omitempty" validate:"omitempty"`
 	// description: |
 	//   Configuration for OpenStack as provider.
-	OpenStack *OpenStackConfig `yaml:"openstack,omitempty" validate:"omitempty,dive"`
+	OpenStack *OpenStackConfig `yaml:"openstack,omitempty" validate:"omitempty"`
 	// description: |
 	//   Configuration for QEMU as provider.
-	QEMU *QEMUConfig `yaml:"qemu,omitempty" validate:"omitempty,dive"`
+	QEMU *QEMUConfig `yaml:"qemu,omitempty" validate:"omitempty"`
 }
 
 // AWSConfig are AWS specific configuration values used by the CLI.
@@ -261,31 +264,31 @@ type QEMUConfig struct {
 type AttestationConfig struct {
 	// description: |
 	//   AWS SEV-SNP attestation.
-	AWSSEVSNP *AWSSEVSNP `yaml:"awsSEVSNP,omitempty" validate:"omitempty,dive"`
+	AWSSEVSNP *AWSSEVSNP `yaml:"awsSEVSNP,omitempty" validate:"omitempty"`
 	// description: |
 	//   AWS Nitro TPM attestation.
-	AWSNitroTPM *AWSNitroTPM `yaml:"awsNitroTPM,omitempty" validate:"omitempty,dive"`
+	AWSNitroTPM *AWSNitroTPM `yaml:"awsNitroTPM,omitempty" validate:"omitempty"`
 	// description: |
 	//   Azure SEV-SNP attestation.\nFor details see: https://docs.edgeless.systems/constellation/architecture/attestation#cvm-verification
-	AzureSEVSNP *AzureSEVSNP `yaml:"azureSEVSNP,omitempty" validate:"omitempty,dive"`
+	AzureSEVSNP *AzureSEVSNP `yaml:"azureSEVSNP,omitempty" validate:"omitempty"`
 	// description: |
 	//   Azure TDX attestation.
-	AzureTDX *AzureTDX `yaml:"azureTDX,omitempty" validate:"omitempty,dive"`
+	AzureTDX *AzureTDX `yaml:"azureTDX,omitempty" validate:"omitempty"`
 	// description: |
 	//   Azure TPM attestation (Trusted Launch).
-	AzureTrustedLaunch *AzureTrustedLaunch `yaml:"azureTrustedLaunch,omitempty" validate:"omitempty,dive"`
+	AzureTrustedLaunch *AzureTrustedLaunch `yaml:"azureTrustedLaunch,omitempty" validate:"omitempty"`
 	// description: |
 	//   GCP SEV-ES attestation.
-	GCPSEVES *GCPSEVES `yaml:"gcpSEVES,omitempty" validate:"omitempty,dive"`
+	GCPSEVES *GCPSEVES `yaml:"gcpSEVES,omitempty" validate:"omitempty"`
 	// description: |
 	// 	 GCP SEV-SNP attestation.
-	GCPSEVSNP *GCPSEVSNP `yaml:"gcpSEVSNP,omitempty" validate:"omitempty,dive"`
+	GCPSEVSNP *GCPSEVSNP `yaml:"gcpSEVSNP,omitempty" validate:"omitempty"`
 	// description: |
 	//   QEMU tdx attestation.
-	QEMUTDX *QEMUTDX `yaml:"qemuTDX,omitempty" validate:"omitempty,dive"`
+	QEMUTDX *QEMUTDX `yaml:"qemuTDX,omitempty" validate:"omitempty"`
 	// description: |
 	//   QEMU vTPM attestation.
-	QEMUVTPM *QEMUVTPM `yaml:"qemuVTPM,omitempty" validate:"omitempty,dive"`
+	QEMUVTPM *QEMUVTPM `yaml:"qemuVTPM,omitempty" validate:"omitempty"`
 }
 
 // NodeGroup defines a group of nodes with the same role and configuration.
@@ -322,6 +325,7 @@ func Default() *Config {
 		KubernetesVersion:   versions.Default,
 		DebugCluster:        toPtr(false),
 		ServiceCIDR:         "10.96.0.0/12",
+		Tags:                cloudprovider.Tags{},
 		Provider: ProviderConfig{
 			AWS: &AWSConfig{
 				Region:                 "",
@@ -464,18 +468,22 @@ func New(fileHandler file.Handler, name string, fetcher attestationconfigapi.Fet
 		return nil, err
 	}
 
+	// Replace "latest" placeholders for attestation version numbers with the actual latest version numbers from config API
 	if azure := c.Attestation.AzureSEVSNP; azure != nil {
 		if err := azure.FetchAndSetLatestVersionNumbers(context.Background(), fetcher); err != nil {
 			return c, err
 		}
 	}
-
+	if azure := c.Attestation.AzureTDX; azure != nil {
+		if err := azure.FetchAndSetLatestVersionNumbers(context.Background(), fetcher); err != nil {
+			return c, err
+		}
+	}
 	if aws := c.Attestation.AWSSEVSNP; aws != nil {
 		if err := aws.FetchAndSetLatestVersionNumbers(context.Background(), fetcher); err != nil {
 			return c, err
 		}
 	}
-
 	if gcp := c.Attestation.GCPSEVSNP; gcp != nil {
 		if err := gcp.FetchAndSetLatestVersionNumbers(context.Background(), fetcher); err != nil {
 			return c, err
@@ -989,16 +997,16 @@ type GCPSEVSNP struct {
 	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
 	// description: |
 	//   Lowest acceptable bootloader version.
-	BootloaderVersion AttestationVersion `json:"bootloaderVersion" yaml:"bootloaderVersion"`
+	BootloaderVersion AttestationVersion[uint8] `json:"bootloaderVersion" yaml:"bootloaderVersion"`
 	// description: |
 	//   Lowest acceptable TEE version.
-	TEEVersion AttestationVersion `json:"teeVersion" yaml:"teeVersion"`
+	TEEVersion AttestationVersion[uint8] `json:"teeVersion" yaml:"teeVersion"`
 	// description: |
 	//   Lowest acceptable SEV-SNP version.
-	SNPVersion AttestationVersion `json:"snpVersion" yaml:"snpVersion"`
+	SNPVersion AttestationVersion[uint8] `json:"snpVersion" yaml:"snpVersion"`
 	// description: |
 	//   Lowest acceptable microcode version.
-	MicrocodeVersion AttestationVersion `json:"microcodeVersion" yaml:"microcodeVersion"`
+	MicrocodeVersion AttestationVersion[uint8] `json:"microcodeVersion" yaml:"microcodeVersion"`
 	// description: |
 	//   AMD Root Key certificate used to verify the SEV-SNP certificate chain.
 	AMDRootKey Certificate `json:"amdRootKey" yaml:"amdRootKey"`
@@ -1076,16 +1084,16 @@ type AWSSEVSNP struct {
 	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
 	// description: |
 	//   Lowest acceptable bootloader version.
-	BootloaderVersion AttestationVersion `json:"bootloaderVersion" yaml:"bootloaderVersion"`
+	BootloaderVersion AttestationVersion[uint8] `json:"bootloaderVersion" yaml:"bootloaderVersion"`
 	// description: |
 	//   Lowest acceptable TEE version.
-	TEEVersion AttestationVersion `json:"teeVersion" yaml:"teeVersion"`
+	TEEVersion AttestationVersion[uint8] `json:"teeVersion" yaml:"teeVersion"`
 	// description: |
 	//   Lowest acceptable SEV-SNP version.
-	SNPVersion AttestationVersion `json:"snpVersion" yaml:"snpVersion"`
+	SNPVersion AttestationVersion[uint8] `json:"snpVersion" yaml:"snpVersion"`
 	// description: |
 	//   Lowest acceptable microcode version.
-	MicrocodeVersion AttestationVersion `json:"microcodeVersion" yaml:"microcodeVersion"`
+	MicrocodeVersion AttestationVersion[uint8] `json:"microcodeVersion" yaml:"microcodeVersion"`
 	// description: |
 	//   AMD Root Key certificate used to verify the SEV-SNP certificate chain.
 	AMDRootKey Certificate `json:"amdRootKey" yaml:"amdRootKey"`
@@ -1108,16 +1116,16 @@ type AzureSEVSNP struct {
 	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
 	// description: |
 	//   Lowest acceptable bootloader version.
-	BootloaderVersion AttestationVersion `json:"bootloaderVersion" yaml:"bootloaderVersion"`
+	BootloaderVersion AttestationVersion[uint8] `json:"bootloaderVersion" yaml:"bootloaderVersion"`
 	// description: |
 	//   Lowest acceptable TEE version.
-	TEEVersion AttestationVersion `json:"teeVersion" yaml:"teeVersion"`
+	TEEVersion AttestationVersion[uint8] `json:"teeVersion" yaml:"teeVersion"`
 	// description: |
 	//   Lowest acceptable SEV-SNP version.
-	SNPVersion AttestationVersion `json:"snpVersion" yaml:"snpVersion"`
+	SNPVersion AttestationVersion[uint8] `json:"snpVersion" yaml:"snpVersion"`
 	// description: |
 	//   Lowest acceptable microcode version.
-	MicrocodeVersion AttestationVersion `json:"microcodeVersion" yaml:"microcodeVersion"`
+	MicrocodeVersion AttestationVersion[uint8] `json:"microcodeVersion" yaml:"microcodeVersion"`
 	// description: |
 	//   Configuration for validating the firmware signature.
 	FirmwareSignerConfig SNPFirmwareSignerConfig `json:"firmwareSignerConfig" yaml:"firmwareSignerConfig"`
@@ -1126,7 +1134,7 @@ type AzureSEVSNP struct {
 	AMDRootKey Certificate `json:"amdRootKey" yaml:"amdRootKey"`
 	// description: |
 	//   AMD Signing Key certificate used to verify the SEV-SNP VCEK / VLEK certificate.
-	AMDSigningKey Certificate `json:"amdSigningKey,omitempty" yaml:"amdSigningKey,omitempty" validate:"len=0"`
+	AMDSigningKey Certificate `json:"amdSigningKey,omitempty" yaml:"amdSigningKey,omitempty"`
 }
 
 // AzureTrustedLaunch is the configuration for Azure Trusted Launch attestation.
@@ -1143,22 +1151,22 @@ type AzureTDX struct {
 	Measurements measurements.M `json:"measurements" yaml:"measurements" validate:"required,no_placeholders"`
 	// description: |
 	//   Minimum required QE security version number (SVN).
-	QESVN uint16 `json:"qeSVN" yaml:"qeSVN"`
+	QESVN AttestationVersion[uint16] `json:"qeSVN" yaml:"qeSVN"`
 	// description: |
 	//   Minimum required PCE security version number (SVN).
-	PCESVN uint16 `json:"pceSVN" yaml:"pceSVN"`
+	PCESVN AttestationVersion[uint16] `json:"pceSVN" yaml:"pceSVN"`
 	// description: |
 	//   Component-wise minimum required 16 byte hex-encoded TEE_TCB security version number (SVN).
-	TEETCBSVN encoding.HexBytes `json:"teeTCBSVN" yaml:"teeTCBSVN"`
+	TEETCBSVN AttestationVersion[encoding.HexBytes] `json:"teeTCBSVN" yaml:"teeTCBSVN"`
 	// description: |
 	//   Expected 16 byte hex-encoded QE_VENDOR_ID field.
-	QEVendorID encoding.HexBytes `json:"qeVendorID" yaml:"qeVendorID"`
+	QEVendorID AttestationVersion[encoding.HexBytes] `json:"qeVendorID" yaml:"qeVendorID"`
 	// description: |
 	//   Expected 48 byte hex-encoded MR_SEAM value.
-	MRSeam encoding.HexBytes `json:"mrSeam" yaml:"mrSeam"`
+	MRSeam encoding.HexBytes `json:"mrSeam,omitempty" yaml:"mrSeam,omitempty"`
 	// description: |
-	//   Expected 8 byte hex-encoded XFAM field.
-	XFAM encoding.HexBytes `json:"xfam" yaml:"xfam"`
+	//   Expected 8 byte hex-encoded eXtended Features Available Mask (XFAM) field. Defaults to the latest available XFAM on Azure VMs. Unset to disable validation.
+	XFAM AttestationVersion[encoding.HexBytes] `json:"xfam" yaml:"xfam"`
 	// description: |
 	//   Intel Root Key certificate used to verify the TDX certificate chain.
 	IntelRootKey Certificate `json:"intelRootKey" yaml:"intelRootKey"`

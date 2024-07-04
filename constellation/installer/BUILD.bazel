@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "installer",
     srcs = ["installer.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/installer",
+    importpath = "github.com/konvera/geth-sev/constellation/installer",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/retry",

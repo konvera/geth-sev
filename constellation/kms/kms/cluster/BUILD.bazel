@@ -4,7 +4,7 @@ load("//bazel/go:go_test.bzl", "go_test")
 go_library(
     name = "cluster",
     srcs = ["cluster.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/kms/kms/cluster",
+    importpath = "github.com/konvera/geth-sev/constellation/kms/kms/cluster",
     visibility = ["//:__subpackages__"],
     deps = ["//internal/crypto"],
 )

@@ -3,7 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "imageinfo",
     srcs = ["imageinfo.go"],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/osimage/imageinfo",
+    importpath = "github.com/konvera/geth-sev/constellation/osimage/imageinfo",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/api/versionsapi",

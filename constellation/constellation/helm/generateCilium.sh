@@ -21,8 +21,8 @@ git clone \
   --no-checkout \
   --sparse \
   --depth 1 \
-  -b 1.15.0-pre.3 \
-  https://github.com/cilium/cilium.git
+  -b v1.15.5-edg.1 \
+  https://github.com/edgelesssys/cilium.git
 cd cilium
 
 git sparse-checkout add install/kubernetes/cilium

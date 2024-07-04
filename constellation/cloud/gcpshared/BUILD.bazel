@@ -8,7 +8,7 @@ go_library(
         "providerid.go",
         "serviceaccountkey.go",
     ],
-    importpath = "github.com/edgelesssys/constellation/v2/internal/cloud/gcpshared",
+    importpath = "github.com/konvera/geth-sev/constellation/cloud/gcpshared",
     visibility = ["//:__subpackages__"],
 )
 
